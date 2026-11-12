@@ -34,4 +34,5 @@ test "the harness: the original's frames decode through std and the original" {
 
 test {
     _ = @import("core_test.zig");
+    _ = @import("ldm_test.zig");
 }
