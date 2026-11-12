@@ -61,34 +61,39 @@ zig build <step> -j3`, never while the scratchpad's `bench.running` exists.
 corpus runs.
 
 All porting branches (`port/*`) are merged into `main` and pushed. Steps 1 to 4 of the
-methodology are done (the step 4 report is above). The run stopped at the end of the
-author's session on 11 November, during step 5.
+methodology are done (the step 4 report is above), and README.md, `doc/TESTING.md` and
+`doc/parity.md` are on `main`. The left-out list is approved by the author.
 
 **Where things are.**
 - `main`: the whole port, 298 of 298 tests passing with the corpora (`zig build test`,
-  28 minutes) and the benchmark tables in `doc/BENCHMARKS.md` (from before step 5).
-- `review/perf-and-skeptic`: `main` plus step 5's first change, `cc86709`: the
+  28 minutes), the docs, and the benchmark tables in `doc/BENCHMARKS.md` (from before
+  step 5).
+- `review/perf-and-skeptic`: `main` plus step 5's first change, `cc86709` (the
   double-fast finder's range test on the long candidate is a conditional move on x86-64,
-  as upstream's inline-asm `ZSTD_selectAddr` is. Level 4 takes 11% less time; levels 3
-  and 1 are unchanged. The oracle tests pass on both builds.
+  as upstream's inline-asm `ZSTD_selectAddr` is; level 4 takes 11% less time), and the
+  first skeptic's probes in `test/skeptic_test.zig` behind `-Dskeptic` (all passing). A
+  second skeptic adds failing tests there, one per finding, named `skeptic: ...`.
+- `review/perf-2` (worktree `zig-zstd.wt/perf2`): the second perf pass, made from
+  `review/perf-and-skeptic`. Its target is no level slower than upstream, level 3 and 4
+  first. Each kept change is one commit with its pinned-core gain in the message; its
+  notes on what was tried are in the section below as they land.
 - `port/*`: the merged porting branches, kept for history.
 
 **To resume.**
-1. Step 5 on `review/perf-and-skeptic`, by a fresh agent: level 3 (dfast) is still about
-   9% to 10% slower on whole files, level 1 (fast) a steady 5.6% slower, levels 5, 7 and 8
-   (row matcher) 3% to 6% slower; nothing located yet. `perf` is blocked by
-   `perf_event_paranoid` on this machine, so a profile needs the author to lower it.
-   The dfast loop's labeled `switch`/`continue` compiles to table jumps where upstream has
-   direct gotos (not measured). The bench's `port_multithread_merged` switch
-   (bench/bench.zig) can now be set to true, since the streaming MT path is merged. Rerun
-   `zig build bench` at the end and replace the tables in `doc/BENCHMARKS.md`.
-2. Step 6, a fresh skeptic agent on the same branch, with the open points below as a
-   start: upstream asserts that safe builds turn into panics on caller-supplied
-   dictionaries and sequences, the two upstream out-of-bounds reads the stream tests avoid,
-   the Io requirement for workers, the static-context deviations.
-3. Step 7, fixes with failing-first tests; the full suite and the benchmark again.
-4. README.md (layout in the gameplan's `port-readme.md`, with the author's notice wording
-   and "N% faster/slower" headline rows), `doc/TESTING.md`, `doc/parity.md`; then step 8.
+1. Step 7 on `review/perf-and-skeptic`: fix each `skeptic: ...` test until it passes
+   (the tests fail first). Known from the first skeptic: `common.generated(0, ...)`
+   segfaults because upstream's datagen writes the first byte even for size 0 (guard it
+   in `test/common.zig`); `ZSTD_sizeof_CCtx` with workers depends on timing in upstream
+   itself, so exact sizeof comparisons with workers can flake.
+2. Merge `review/perf-2` into `review/perf-and-skeptic`; run the full suite with the
+   corpora; set `port_multithread_merged = true` in bench/bench.zig if the perf pass has
+   not; run the full benchmark pinned to one core and replace the tables in
+   `doc/BENCHMARKS.md` and the README headline rows ("N% faster/slower").
+3. Step 8 after the author's review: merge into `main`, version and tag.
+
+Builds and timing: `perf` is blocked by `perf_event_paranoid` on this machine, so a
+profile needs the author to lower it. Time with the build lock held and pinned to one
+core, for example `flock <lock> taskset -c 6 ./zig-out/bin/bench --levels 3,4 --runs 5`.
 
 Pushing: `main` and the review branch go to
 `git@github.com:farhollowgames/zig-zstd.git`, fast-forward only.
@@ -168,8 +173,8 @@ Pushing: `main` and the review branch go to
 | `ZSTD_compress_advanced` | `CCtx.compressAdvanced` | oracle-tested |
 | `ZSTD_writeSkippableFrame` | `writeSkippableFrame` | oracle-tested |
 | `ZSTD_minCLevel`, `ZSTD_maxCLevel`, `ZSTD_defaultCLevel` | same | oracle-tested |
-| `ZSTD_versionNumber`, `ZSTD_versionString` | `params.version_number`, `params.version_string` | not started |
-| `ZSTD_isError`, `ZSTD_getErrorCode`, `ZSTD_getErrorName` | `Error`, `errorCode` | not started |
+| `ZSTD_versionNumber`, `ZSTD_versionString` | `params.version_number`, `params.version_string` | ported (constants for 1.5.7; the tests check the reference's number) |
+| `ZSTD_isError`, `ZSTD_getErrorCode`, `ZSTD_getErrorName` | `Error`, `errorCode` | oracle-tested (every failing result compares its code with the original's; names are Zig's error names) |
 | frame header: magic, window descriptor, content size, dictionary id, single segment | in `compress.zig` | oracle-tested |
 | checksum (XXH64) | `std.hash.XxHash64` | oracle-tested |
 | raw, RLE and compressed blocks; last-block flag | in `compress.zig` | oracle-tested |
@@ -183,14 +188,14 @@ Pushing: `main` and the review branch go to
 | negative levels (`ZSTD_minCLevel` = -131072) | `fast` with target length | oracle-tested per block (the table rows, and `fast` with target lengths up to 100) |
 | `ZSTD_fast` (`zstd_fast.c`), with dictMatchState and extDict | `fast.zig` | oracle-tested per block and in frames |
 | `ZSTD_dfast` (`zstd_double_fast.c`) | `double_fast.zig` | oracle-tested per block and in frames |
-| `ZSTD_greedy`, `ZSTD_lazy`, `ZSTD_lazy2` (hash chain) | `lazy.zig` | not started |
-| the row-based match finder (`useRowMatchFinder`), SSE2 and NEON tag compare | `lazy.zig`, `@Vector` | not started |
-| `ZSTD_btlazy2` (binary tree) | `lazy.zig` | not started |
-| dedicated dictionary search (`enableDedicatedDictSearch`) | `lazy.zig` | not started |
+| `ZSTD_greedy`, `ZSTD_lazy`, `ZSTD_lazy2` (hash chain) | `lazy.zig` | oracle-tested per block, with dictMatchState and extDict, and in frames |
+| the row-based match finder (`useRowMatchFinder`), SSE2 and NEON tag compare | `lazy.zig`, `@Vector` | oracle-tested per block and in frames, SIMD and scalar builds (NEON only by a unit test on x86) |
+| `ZSTD_btlazy2` (binary tree) | `lazy.zig` | oracle-tested per block, with extDict, and in frames with dictionaries |
+| dedicated dictionary search (`enableDedicatedDictSearch`) | `lazy.zig` | oracle-tested per block and in frames with CDicts |
 | `ZSTD_btopt`, `ZSTD_btultra`, `ZSTD_btultra2` (`zstd_opt.c`), with dictMatchState and extDict, btultra2's two passes over the first block | `opt.zig` | oracle-tested per block (`test/opt_test.zig`) and in frames |
 | the optimal parser's price model: dictionary entropy tables, fixed prices for tiny blocks, literal compression off, statistics across blocks | `opt.zig` | oracle-tested per block |
-| long distance match candidates in the optimal parser (`ZSTD_optLdm_*`) | `opt.zig` | oracle-tested per block, on hand-made candidates; with `ldm.zig`'s once it lands |
-| long-distance matching (`zstd_ldm.c`) | `ldm.zig` | not started |
+| long distance match candidates in the optimal parser (`ZSTD_optLdm_*`) | `opt.zig` | oracle-tested per block, on hand-made candidates; and in frames with `ldm.zig`'s |
+| long-distance matching (`zstd_ldm.c`) | `ldm.zig` | oracle-tested below the frame (`test/ldm_test.zig`: gear hash splits, parameter defaults, sequence skipping and splitting, `ZSTD_ldm_generateSequences` over far repeats, dictionaries, full stores and the overflow correction, `ZSTD_ldm_blockCompress`) and in frames, single-threaded and with workers. `ZSTD_ldm_gear_reset` never stores its hash in the original, and the port keeps that |
 | `ZSTD_getCParams`, `ZSTD_getParams`, `ZSTD_checkCParams`, `ZSTD_adjustCParams` | same | oracle-tested |
 
 ## Entropy coding
@@ -294,8 +299,8 @@ Pushing: `main` and the review branch go to
 | original | zig-zstd | state |
 | --- | --- | --- |
 | `ZSTD_MULTITHREAD` | `-Dmultithread` (`build_options.multithread`) | ported (off: one shared pool runs jobs inline, and no multithreaded context is made) |
-| `ZSTD_NO_INTRINSICS`, `ZSTD_ARCH_X86_SSE2`, `ZSTD_ARCH_X86_AVX2`, `ZSTD_ARCH_ARM_NEON` | `-Dintrinsics`, the target's CPU features | not started |
-| `ZSTD_CLEVEL_DEFAULT` | `params.clevel_default` | not started |
+| `ZSTD_NO_INTRINSICS`, `ZSTD_ARCH_X86_SSE2`, `ZSTD_ARCH_X86_AVX2`, `ZSTD_ARCH_ARM_NEON` | `-Dintrinsics`, the target's CPU features | oracle-tested (the `oracle` build against the reference with SIMD, `oracle-scalar` with intrinsics off on both sides; NEON only by a unit test on x86) |
+| `ZSTD_CLEVEL_DEFAULT` | `params.clevel_default` | oracle-tested (level 0 and the default level against `ZSTD_getCParams`) |
 | `ZSTDMT_NBWORKERS_MAX`, `ZSTDMT_JOBSIZE_MIN`, `ZSTDMT_JOBSIZE_MAX` | `nbworkers_max`, `jobsize_min`, `jobsize_max` in `zstdmt.zig` | ported (the original's values; the parameter bounds in `compress.zig` use them) |
 | `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY` | a build option for the tests | ported (`build_options.overflow_correct_frequently`, always off: no `-D` flag yet) |
 
