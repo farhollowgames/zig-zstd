@@ -93,11 +93,15 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
     keep the first pool (the original's through `reference_mtFactory`).
   - Docs: `copyCCtx` does not say that the copy refers to what the source's window
     refers to (a `compressBeginUsingDict` dictionary, a CDict's content) until its frame
-    ends, and `zstd.zig`'s list of references misses it.
+    ends, and `zstd.zig`'s list of references misses it. **Fixed** in `1e9973b`, with
+    the docs of the `CDict` and local dictionary fields, which said a session reset
+    ends them.
   - `test/mt_test.zig`'s `Observed` compares `sizeof_after_init` with workers, which
     differs between two runs of the original itself (9,167,360 against 7,337,440 in
     `zstdmt: a context reused, resized, abandoned mid-frame, on a shared pool`): drop it
-    with workers.
+    with workers. **Fixed** in `dfc7422`: the size is not compared after an abandoned
+    frame, the one case whose pools depend on timing; `common.generated(0, ...)` is
+    guarded in the same commit.
   - `-Doverflow-correct-frequently` (build.zig) builds both sides with
     `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY`, so the main window's overflow correction
     (`reduceIndex`, never reached by the normal suite) runs: 33 of 34 frame, stream,
@@ -142,12 +146,10 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
 - `port/*`: the merged porting branches, kept for history.
 
 **To resume.**
-1. Step 7 on `review/perf-and-skeptic`: fix each `skeptic: ...` test until it passes
-   (the tests fail first), and the second skeptic's other points above. Known from the
-   first skeptic: `common.generated(0, ...)` segfaults because upstream's datagen writes
-   the first byte even for size 0 (`programs/datagen.c:119`; guard it in
-   `test/common.zig`); `ZSTD_sizeof_CCtx` with workers depends on timing in upstream
-   itself, so exact sizeof comparisons with workers can flake.
+1. Step 7 on `review/perf-and-skeptic` (under way): the window sums, the pool docs,
+   the copy docs and the test harness are fixed (marked above). Left: 32-bit targets,
+   the fuzz ranges and the corpus levels, `-Doverflow-correct-frequently` in
+   `doc/TESTING.md`, then the full suite with the corpora and `-Dskeptic` once.
 2. Merge `review/perf-2` into `review/perf-and-skeptic`; run the full suite with the
    corpora; set `port_multithread_merged = true` in bench/bench.zig if the perf pass has
    not; run the full benchmark pinned to one core and replace the tables in
