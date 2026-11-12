@@ -10,9 +10,15 @@
 //! the port and the original taking turns, after one untimed run of each, which also compares
 //! the two sides' frames byte for byte. Nothing is pinned to a core.
 //!
+//! On Linux, transparent huge pages are off for the process, so both sides' tables are on
+//! 4 KiB pages. With them on, whether a side's tables land on a huge page turns on where
+//! malloc places its context, which follows the order the two sides allocate in.
+//!
 //! Arguments after `--`: `--levels 1,3,19` picks the levels, `--runs N` sets the number of
 //! timed runs, `--quick` samples 4 MiB in all for every level and takes 3 runs (a smoke test),
-//! `--markdown` prints the table for doc/BENCHMARKS.md.
+//! `--markdown` prints the table for doc/BENCHMARKS.md, `--huge-pages` leaves transparent huge
+//! pages as the system has them, and `--original-first` has the original compress first in
+//! the warm-up, so that it allocates its tables first.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -60,6 +66,8 @@ const Options = struct {
     runs: ?usize = null,
     quick: bool = false,
     markdown: bool = false,
+    huge_pages: bool = false,
+    original_first: bool = false,
 };
 
 /// The frames a row compresses, each a piece of the corpus.
@@ -198,7 +206,7 @@ fn timedPass(io: std.Io, side: anytype, set: Set, dst: []u8) Pass {
     return pass;
 }
 
-fn measure(io: std.Io, row: Row, set: Set, runs: usize) !Result {
+fn measure(io: std.Io, row: Row, set: Set, runs: usize, original_allocates: bool) !Result {
     const port: Port = try .init(row);
     defer port.deinit();
     const original: Original = try .init(row);
@@ -227,8 +235,16 @@ fn measure(io: std.Io, row: Row, set: Set, runs: usize) !Result {
         .checksum = 0,
     };
     for (set.pieces) |piece| {
-        const port_size = port.compress(port_out, piece);
-        const original_size = original.compress(original_out, piece);
+        // The side that compresses the first piece first allocates its tables first.
+        var port_size: usize = undefined;
+        var original_size: usize = undefined;
+        if (original_allocates) {
+            original_size = original.compress(original_out, piece);
+            port_size = port.compress(port_out, piece);
+        } else {
+            port_size = port.compress(port_out, piece);
+            original_size = original.compress(original_out, piece);
+        }
         result.port_bytes += port_size;
         result.original_bytes += original_size;
         const same = std.mem.eql(u8, port_out[0..port_size], original_out[0..original_size]);
@@ -432,6 +448,10 @@ fn parseOptions(arena: std.mem.Allocator, args: []const [:0]const u8) !Options {
             options.quick = true;
         } else if (std.mem.eql(u8, arg, "--markdown")) {
             options.markdown = true;
+        } else if (std.mem.eql(u8, arg, "--huge-pages")) {
+            options.huge_pages = true;
+        } else if (std.mem.eql(u8, arg, "--original-first")) {
+            options.original_first = true;
         } else if (std.mem.eql(u8, arg, "--runs")) {
             i += 1;
             if (i == args.len) fatal("--runs needs a number", .{});
@@ -505,6 +525,9 @@ pub fn main(init: std.process.Init) !void {
     var stdout = std.Io.File.stdout().writerStreaming(io, &buffer);
     const w = &stdout.interface;
 
+    const thp_off = builtin.os.tag == .linux and !options.huge_pages;
+    if (thp_off) _ = try std.posix.prctl(.SET_THP_DISABLE, .{ 1, 0, 0, 0 });
+
     const corpus = (try Corpus.load(io)) orelse {
         try w.writeAll("The Silesia corpus is not fetched (its directory is empty or missing), " ++
             "so there is nothing to time; `zig build bench` fetches it when the network is up.\n");
@@ -550,6 +573,10 @@ pub fn main(init: std.process.Init) !void {
     try info(w, markdown, "original: zstd {d}.{d}.{d} from reference/, same target: {s}", .{
         version / 10000, version / 100 % 100, version % 100, original_flags,
     });
+    try info(w, markdown, "memory: transparent huge pages {s}; the {s} allocates first", .{
+        if (thp_off) "off for the process" else "as the system has them",
+        if (options.original_first) "original" else "port",
+    });
     try info(w, markdown, "command: {s}", .{command.written()});
     try info(w, markdown, "corpus: Silesia, {d} files, {d:.1} MB; the whole-file rows take " ++
         "all of it as {d} frames, the sample rows {d:.1} MB as {d} frames", .{
@@ -591,7 +618,8 @@ pub fn main(init: std.process.Init) !void {
             continue;
         }
         const set = if (row.whole) whole else sample;
-        const result = try measure(io, row, set, runsFor(options, row.level));
+        const runs = runsFor(options, row.level);
+        const result = try measure(io, row, set, runs, options.original_first);
         try table.result(label, result);
         checksum += result.checksum;
         rows_differing += @intFromBool(result.frames_differing != 0);
