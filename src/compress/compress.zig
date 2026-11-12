@@ -2515,14 +2515,19 @@ fn nbLiterals(seq_store: *const SeqStore) usize {
 /// Returns whether an offset is too long for one flush of the bit
 /// register, which only happens on 32-bit targets.
 pub fn seqToCodes(seq_store: *const SeqStore) bool {
+    // The tables in locals: a byte stored through one could otherwise be the
+    // store's own fields, which would be read again for every sequence.
+    const ll_code_table = seq_store.ll_code;
+    const of_code_table = seq_store.of_code;
+    const ml_code_table = seq_store.ml_code;
     const nb_seq = nbSequences(seq_store);
     var long_offsets = false;
     assert(nb_seq <= seq_store.max_nb_seq);
     for (seq_store.sequences_start[0..nb_seq], 0..) |seq, u| {
         const of_code = ci.highbit32(seq.off_base);
-        seq_store.ll_code[u] = @intCast(ci.llCode(seq.lit_length));
-        seq_store.of_code[u] = @intCast(of_code);
-        seq_store.ml_code[u] = @intCast(ci.mlCode(seq.ml_base));
+        ll_code_table[u] = @intCast(ci.llCode(seq.lit_length));
+        of_code_table[u] = @intCast(of_code);
+        ml_code_table[u] = @intCast(ci.mlCode(seq.ml_base));
         assert(!(@sizeOf(usize) == 8 and of_code >= bitstream.accumulator_min));
         if (@sizeOf(usize) == 4 and of_code >= bitstream.accumulator_min) long_offsets = true;
     }

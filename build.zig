@@ -206,7 +206,7 @@ fn addBench(
             },
         }),
     });
-    bench.root_module.linkLibrary(referenceLibrary(b, target, true, false));
+    bench.root_module.linkLibrary(benchReferenceLibrary(b, target));
     const run = b.addRunArtifact(bench);
     run.addPassthruArgs();
     bench_step.dependOn(&run.step);
@@ -220,7 +220,8 @@ fn upstreamModule(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Mo
     });
 }
 
-const reference_sources = [_][]const u8{
+/// What upstream's libzstd builds from lib/, without the legacy decoders.
+const library_sources = [_][]const u8{
     "lib/common/debug.c",
     "lib/common/entropy_common.c",
     "lib/common/error_private.c",
@@ -247,15 +248,22 @@ const reference_sources = [_][]const u8{
     "lib/decompress/zstd_ddict.c",
     "lib/decompress/zstd_decompress.c",
     "lib/decompress/zstd_decompress_block.c",
-    // The dictionary trainer only makes dictionaries for the tests.
+    // The dictionary trainer, part of upstream's library build.
     "lib/dictBuilder/cover.c",
     "lib/dictBuilder/divsufsort.c",
     "lib/dictBuilder/fastcover.c",
     "lib/dictBuilder/zdict.c",
-    // The original's generator of compressible test data.
+};
+
+/// The tests' original: the library, and the original's generator of
+/// compressible test data.
+const reference_sources = library_sources ++ [_][]const u8{
     "programs/datagen.c",
     "programs/lorem.c",
 };
+
+/// The decoder's x86-64 assembly, which lib/ builds in on x86-64.
+const reference_decoder_assembly = "reference/lib/decompress/huf_decompress_amd64.S";
 
 /// The flags of upstream's own library build (lib/libzstd.mk), at -O3:
 /// Zig builds C in ReleaseFast at -O2, and a later -O3 overrides it.
@@ -268,16 +276,53 @@ const reference_flags = [_][]const u8{
     "-fno-sanitize=undefined",
 };
 
+/// Upstream's shared library build adds these (lib/Makefile): only the API
+/// that zstd.h marks visible is exported, so the library's calls into its
+/// own functions bind directly rather than through the PLT.
+const reference_shared_flags = reference_flags ++ [_][]const u8{
+    "-fPIC",
+    "-fvisibility=hidden",
+};
+
 const reference_scalar_flags = reference_flags ++ [_][]const u8{
     "-DZSTD_NO_INTRINSICS",
     "-DDYNAMIC_BMI2=0",
     "-DZSTD_DISABLE_ASM",
 };
 
-/// The original library from reference/, as a shared library on glibc, so
-/// its calls into the C library bind to the system's, as in a normal build
-/// of it, rather than to compiler_rt's versions. `simd` false builds it
-/// with its scalar paths only.
+/// The benchmark's original: upstream's own shared library build of lib/,
+/// so it runs as a normal build of it does. On other C libraries it is
+/// static, as `referenceLibrary` is, and then the visibility changes nothing.
+fn benchReferenceLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.Compile {
+    const glibc = target.result.isGnuLibC();
+    const library = b.addLibrary(.{
+        .name = "zstd_reference_bench",
+        .linkage = if (glibc) .dynamic else .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = .fast,
+            .link_libc = true,
+        }),
+    });
+    if (glibc) library.bundle_compiler_rt = false;
+    library.root_module.addCSourceFiles(.{
+        .root = b.path("reference"),
+        .files = &library_sources,
+        .flags = &reference_shared_flags,
+    });
+    if (target.result.cpu.arch == .x86_64) {
+        library.root_module.addAssemblyFile(b.path(reference_decoder_assembly));
+    }
+    library.root_module.addIncludePath(b.path("reference/lib"));
+    library.root_module.addIncludePath(b.path("reference/lib/common"));
+    return library;
+}
+
+/// The tests' original library from reference/, as a shared library on
+/// glibc, so its calls into the C library bind to the system's, as in a
+/// normal build of it, rather than to compiler_rt's versions. Every symbol
+/// is exported, for the internal functions test/upstream.zig declares.
+/// `simd` false builds it with its scalar paths only.
 fn referenceLibrary(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -311,7 +356,7 @@ fn referenceLibrary(
         .flags = flags,
     });
     if (simd and target.result.cpu.arch == .x86_64) {
-        library.root_module.addAssemblyFile(b.path("reference/lib/decompress/huf_decompress_amd64.S"));
+        library.root_module.addAssemblyFile(b.path(reference_decoder_assembly));
     }
     library.root_module.addCSourceFile(.{
         .file = b.path("test/reference.c"),

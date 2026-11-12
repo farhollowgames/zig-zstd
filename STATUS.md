@@ -32,7 +32,8 @@ test runs 1,000 cases. Frames are compared byte for byte with the original's, an
 frame decodes through std's decoder and the original's.
 
 **Speed and ratio** (Silesia, one thread, `zig build bench`, before the performance pass;
-`doc/BENCHMARKS.md`). Ratios are equal at every level, since the frames are equal.
+`doc/BENCHMARKS.md` has the numbers after the second pass). Ratios are equal at every
+level, since the frames are equal.
 
 | levels | port against the original |
 | --- | --- |
@@ -175,21 +176,91 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
   notes on what was tried are in the section below as they land.
 - `port/*`: the merged porting branches, kept for history.
 
+**The second performance pass** (`review/perf-2`, worktree `zig-zstd.wt/perf2`), as of
+03:40 on 12 November:
+- Profiling works: `perf record -e cycles:u` (user-mode events pass `perf_event_paranoid`
+  2; only kernel events are blocked). In a profile of the bench, `bench` is the port and
+  `libzstd_reference.so` the original, so `perf report --sort dso,sym` compares them
+  function by function. Sample with `-c 1000000`; pin with `taskset -c 6` under the lock.
+  Instruction counts (`instructions:u`) do not depend on load, so instruction profiles
+  can run without the lock; cycle profiles need it.
+- Level 3 before this pass: the dfast block compressor took 40.9% of the cycles against
+  the original's 37.6%, and ran 32% more instructions (37.8% of all instructions against
+  28.6%). The inner search loops cost the same; the match path (count, storeSeq, table
+  inserts, repeat offsets) cost about 30% more. The entropy stages are even.
+- Kept: the repeat offsets swap through a temporary (fast and dfast, every dictionary
+  mode) and the Huffman sort swaps nodes the same way. `std.mem.swap` in Zig 0.17 swaps
+  byte by byte, which split the offsets into bytes for the whole function. Level 3 1.078
+  to 1.031, level 4 1.098 to 1.058 (pinned, 5 runs); level 1 unchanged at 1.058. The
+  fast, dfast, Huffman and compressCCtx oracle tests pass (49 of 49).
+- Kept: the dfast noDict loop is one labeled switch whose `continue`s name their targets.
+  The search loop left with the next step as a value, and the dispatch on it compiled to
+  jump tables (23 indirect jumps) with the live values on the stack. Level 3 1.038 to
+  1.006 and 0.999 (two passes), level 4 1.057 to 1.041.
+- Kept: the bench turns transparent huge pages off for its process; `--huge-pages` leaves
+  them as the system has them and `--original-first` lets the original allocate first.
+  With them on, which side's tables got huge pages followed where malloc placed each
+  context: level 4 went from 1.038 to 0.960 when the original allocated first, and a
+  rebuilt original moved its own levels 5 to 8 by 6%. With them off the order changes
+  nothing and the L1 TLB misses split evenly between the sides.
+- Kept: the bench's original is upstream's shared library build (`benchReferenceLibrary`
+  in build.zig, -fPIC -fvisibility=hidden); the tests keep theirs. The original's times
+  did not move (within 0.5%). Every ratio from then on is against it with huge pages
+  off: level 1 1.04, level 3 1.015, levels 4 to 8 0.99 to 1.01. Time only while core 6
+  and its sibling 22 are idle: other sessions' test runs share the machine, and a busy
+  sibling inflates a run by half.
+- Kept: `seqToCodes` keeps the three code tables in locals, as the original does: a code
+  byte stored through the store's pointers made the loop read them again after every byte.
+  Levels -5 to 3 0.5% to 1.2% faster (level 2 1.020 to 1.008); from level 4 within the
+  passes' spread.
+- Kept: fast's repeat-offset test makes both comparisons with `&`, as the original's, with
+  no branch between them. Measured in the final state with and without it, level 1 goes
+  from 1.021 to 1.000 and levels -1 to 3 gain 0.5% to 1.6%. Added on its own after
+  `seqToCodes` it measured slower: changes of 1% to 2% are the size of the swings between
+  builds, so this change and the next two are each measured in the final state.
+- Kept: `getLowerBits` masks with `bzhi` on BMI2 targets built with intrinsics, as
+  `BIT_getLowerBits` does. In the final state, every level but 4 0.1% to 2.4% faster
+  with it, level 4 0.6% and 1.0% slower.
+- Kept: `storeSeq` and `storeSeqOnly` read the literal and sequence pointers once into
+  locals and write the sequence whole. In the final state, levels 1 and 6 to 8 1.1% to 3.2%
+  faster with it, level -5 0.8% to 2.1% slower, the others within 1.1%.
+- Kept: the bench's last column says "within noise" where the two sides' min-max spreads
+  overlap.
+- Kept: the bench runs the multithreaded rows (`port_multithread_merged = true`); the
+  port's context gets the bench's `Io` before `nb_workers`.
+- The final run (`doc/BENCHMARKS.md`, the whole run pinned, huge pages off): faster or
+  within noise at levels -5, -1, 3, 4 and 10 to 22 (3.5% faster at 10, 1.6% to 2.8% from
+  13); slower at level 1 by 2.1%, level 2 0.8%, levels 5 to 9 1.5% to 3.6%. There the port
+  runs as many instructions as the original or fewer (0.95 at level 1, 0.99 to 1.00 at 5
+  to 8), and the gap moves with where the code sits: a build with the same port code 1360
+  bytes earlier measured level 1 at 1.00 and levels 5 to 8 at 0.99 to 1.02; profiles of
+  the two show the port's hot loops taking 2% to 14% more cycles for the same instructions.
+  The kept source changes above are each worth 1% to 2%, the size of those swings.
+- The multithreaded rows run and give the same frames; on five cores level 3 with 4
+  workers is even (1.002) and level 19 within noise.
+- The full suite (`zig build test -Dcorpus=false`) passes 293 of 300, 6 skipped; the
+  failure is the timing-dependent multithreading test in the open points below, which
+  fails the same way on the sources before the pass's changes.
+- Left as is: the prefix copy in `zstdmt.zig` is `std.mem.copyForwards`, a byte loop where
+  the original uses memmove; it runs once each time the round buffer wraps.
+- Tried and dropped: the dfast repeat-offset test as `&` (no change in time), glibc's
+  `glibc.malloc.hugetlb` tunable for the huge-page bias (no effect).
+- Next, if wanted: why the row matcher's searches at levels 5 to 9 and the fast loop at
+  level 1 lose cycles in some layouts (`perf annotate` of both builds' hot loops).
+
 **To resume.**
-1. Step 7 on `review/perf-and-skeptic`: the window sums, the pool docs, the copy
-   docs, the test harness and the fuzz ranges are fixed, and 32-bit partly (marked
-   above). The full suite with the corpora passes (306 of 306), as do `-Dskeptic` and
-   `-Doverflow-correct-frequently` (counts in `doc/TESTING.md`). Left: the 32-bit
-   points above, after the perf pass merges (they touch the match finders).
-2. Merge `review/perf-2` into `review/perf-and-skeptic`; run the full suite with the
-   corpora; set `port_multithread_merged = true` in bench/bench.zig if the perf pass has
-   not; run the full benchmark pinned to one core and replace the tables in
-   `doc/BENCHMARKS.md` and the README headline rows ("N% faster/slower").
+1. The 32-bit points above (the `p - window.base` sites without wrap-around, tables past
+   the address space, `initStatic`), now that the perf pass is merged into
+   `review/perf-and-skeptic`. Step 7 is otherwise done: the full suite with the corpora,
+   `-Dskeptic` and `-Doverflow-correct-frequently` pass (counts in `doc/TESTING.md`).
+2. The README headline rows ("N% faster/slower") from `doc/BENCHMARKS.md`, which holds
+   the table after the second perf pass.
 3. Step 8 after the author's review: merge into `main`, version and tag.
 
-Builds and timing: `perf` is blocked by `perf_event_paranoid` on this machine, so a
-profile needs the author to lower it. Time with the build lock held and pinned to one
-core, for example `flock <lock> taskset -c 6 ./zig-out/bin/bench --levels 3,4 --runs 5`.
+Builds and timing: `perf` is blocked by `perf_event_paranoid` for agents on this
+machine. Time with the build lock held and pinned to one core, for example
+`flock <lock> taskset -c 6 ./zig-out/bin/bench --levels 3,4 --runs 5`; the bench turns
+transparent huge pages off for its process (see `doc/BENCHMARKS.md`).
 
 Pushing: `main` and the review branch go to
 `git@github.com:farhollowgames/zig-zstd.git`, fast-forward only.
@@ -257,6 +328,14 @@ Pushing: `main` and the review branch go to
   literals given. `compressSequences` ignores a frame header that does not
   fit, as the original does (under 18 bytes of output is undefined there);
   the tests give at least 18.
+- The multithreading test "a context reused, resized, abandoned mid-frame, on
+  a shared pool" compares the context's size right after a frame is
+  abandoned. That size counts the worker contexts the abandoned jobs
+  created, which follows the threads' timing: on a loaded machine (12
+  November), the port's came out one or two contexts short of the
+  original's (9167360 and 7337440 bytes against 10997280), with and without
+  the second performance pass's changes. **Fixed** in `dfc7422`: the size is
+  no longer compared after an abandoned frame.
 
 ## Frame and one-shot compression
 

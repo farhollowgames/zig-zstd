@@ -177,184 +177,192 @@ inline fn compressBlockDoubleFastNoDictGeneric(
         }
     }
 
-    // One iteration per match found and stored.
-    while (true) {
-        step = 1;
-        next_step = @intFromPtr(ip) + k_step_incr;
-        ip1 = ip + step;
+    // Every `continue :state` names its target, so each is a direct jump.
+    const State = enum {
+        /// Search from ip for the next match.
+        start,
+        /// A short match at ip: look for a long one at ip + 1.
+        search_next_long,
+        /// ip, offset and m_length are set: store the sequence.
+        match_found,
+        /// The sequence is stored: move past it.
+        match_stored,
+    };
+    state: switch (State.start) {
+        // One pass per match found and stored.
+        .start => {
+            step = 1;
+            next_step = @intFromPtr(ip) + k_step_incr;
+            ip1 = ip + step;
 
-        if (@intFromPtr(ip1) > ilimit) break;
+            if (@intFromPtr(ip1) > ilimit) break :state;
 
-        hl0 = ci.hashPtr(ip, h_bits_l, 8);
-        idxl0 = hash_long[hl0];
-        matchl0 = base + idxl0;
+            hl0 = ci.hashPtr(ip, h_bits_l, 8);
+            idxl0 = hash_long[hl0];
+            matchl0 = base + idxl0;
 
-        // One iteration per position searched.
-        const found: Found = search: while (true) {
-            const hs0 = ci.hashPtr(ip, h_bits_s, mls);
-            const idxs0 = hash_small[hs0];
-            curr = @intCast(@intFromPtr(ip) - @intFromPtr(base));
-            matchs0 = base + idxs0;
+            // One iteration per position searched.
+            while (true) {
+                const hs0 = ci.hashPtr(ip, h_bits_s, mls);
+                const idxs0 = hash_small[hs0];
+                curr = @intCast(@intFromPtr(ip) - @intFromPtr(base));
+                matchs0 = base + idxs0;
 
-            hash_small[hs0] = curr;
-            hash_long[hl0] = curr;
+                hash_small[hs0] = curr;
+                hash_long[hl0] = curr;
 
-            // The repeat offset, without a dictionary.
-            if (offset_1 > 0 and
-                std.mem.readInt(u32, (ip + 1 - offset_1)[0..4], native_endian) ==
-                    std.mem.readInt(u32, (ip + 1)[0..4], native_endian))
-            {
-                m_length = ci.count(ip + 1 + 4, ip + 1 + 4 - offset_1, iend) + 4;
-                ip += 1;
-                const lit_length = @intFromPtr(ip) - @intFromPtr(anchor);
-                ci.storeSeq(seq_store, lit_length, anchor, iend, ci.repcode1_to_offbase, m_length);
-                break :search .match_stored;
-            }
-
-            hl1 = ci.hashPtr(ip1, h_bits_l, 8);
-
-            // idxl0 > prefix_lowest_index is hard to predict; selecting the
-            // address avoids a branch on it, and the code only branches on
-            // it when the bytes match, which is rare.
-            {
-                const matchl0_safe = ci.selectAddr(idxl0, prefix_lowest_index, matchl0, &dummy);
-
-                // A long match in the prefix.
-                if (std.mem.readInt(u64, matchl0_safe[0..8], native_endian) ==
-                    std.mem.readInt(u64, ip[0..8], native_endian) and matchl0_safe == matchl0)
+                // The repeat offset, without a dictionary.
+                if (offset_1 > 0 and
+                    std.mem.readInt(u32, (ip + 1 - offset_1)[0..4], native_endian) ==
+                        std.mem.readInt(u32, (ip + 1)[0..4], native_endian))
                 {
-                    m_length = ci.count(ip + 8, matchl0 + 8, iend) + 8;
-                    offset = @intCast(@intFromPtr(ip) - @intFromPtr(matchl0));
-                    while (@intFromPtr(ip) > @intFromPtr(anchor) and
-                        @intFromPtr(matchl0) > @intFromPtr(prefix_lowest) and
-                        (ip - 1)[0] == (matchl0 - 1)[0])
+                    m_length = ci.count(ip + 1 + 4, ip + 1 + 4 - offset_1, iend) + 4;
+                    ip += 1;
+                    const lit_length = @intFromPtr(ip) - @intFromPtr(anchor);
+                    const off_base = ci.repcode1_to_offbase;
+                    ci.storeSeq(seq_store, lit_length, anchor, iend, off_base, m_length);
+                    continue :state .match_stored;
+                }
+
+                hl1 = ci.hashPtr(ip1, h_bits_l, 8);
+
+                // idxl0 > prefix_lowest_index is hard to predict; selecting the
+                // address avoids a branch on it, and the code only branches on
+                // it when the bytes match, which is rare.
+                {
+                    const matchl0_safe = ci.selectAddr(idxl0, prefix_lowest_index, matchl0, &dummy);
+
+                    // A long match in the prefix.
+                    if (std.mem.readInt(u64, matchl0_safe[0..8], native_endian) ==
+                        std.mem.readInt(u64, ip[0..8], native_endian) and matchl0_safe == matchl0)
                     {
-                        ip -= 1;
-                        matchl0 -= 1;
-                        m_length += 1;
+                        m_length = ci.count(ip + 8, matchl0 + 8, iend) + 8;
+                        offset = @intCast(@intFromPtr(ip) - @intFromPtr(matchl0));
+                        while (@intFromPtr(ip) > @intFromPtr(anchor) and
+                            @intFromPtr(matchl0) > @intFromPtr(prefix_lowest) and
+                            (ip - 1)[0] == (matchl0 - 1)[0])
+                        {
+                            ip -= 1;
+                            matchl0 -= 1;
+                            m_length += 1;
+                        }
+                        continue :state .match_found;
                     }
-                    break :search .match_found;
                 }
+
+                idxl1 = hash_long[hl1];
+                matchl1 = base + idxl1;
+
+                // The same for the short match, as a plain select: the compiler
+                // may branch on it, which measures faster here than the
+                // conditional move `selectAddr` forces on x86-64.
+                const matchs0_safe = if (idxs0 >= prefix_lowest_index) matchs0 else &dummy;
+
+                // A short match in the prefix.
+                if (std.mem.readInt(u32, matchs0_safe[0..4], native_endian) ==
+                    std.mem.readInt(u32, ip[0..4], native_endian) and matchs0_safe == matchs0)
+                {
+                    continue :state .search_next_long;
+                }
+
+                if (@intFromPtr(ip1) >= next_step) {
+                    @prefetch(ip1 + 64, .{ .locality = 3 });
+                    @prefetch(ip1 + 128, .{ .locality = 3 });
+                    step += 1;
+                    next_step += k_step_incr;
+                }
+                ip = ip1;
+                ip1 += step;
+
+                hl0 = hl1;
+                idxl0 = idxl1;
+                matchl0 = matchl1;
+                if (builtin.cpu.arch == .aarch64) @prefetch(ip + 256, .{ .locality = 3 });
+                if (@intFromPtr(ip1) > ilimit) break :state;
             }
+        },
+        .search_next_long => {
+            // A short match: look for a longer one.
+            m_length = ci.count(ip + 4, matchs0 + 4, iend) + 4;
+            offset = @intCast(@intFromPtr(ip) - @intFromPtr(matchs0));
 
-            idxl1 = hash_long[hl1];
-            matchl1 = base + idxl1;
-
-            // The same for the short match, as a plain select: the compiler
-            // may branch on it, which measures faster here than the
-            // conditional move `selectAddr` forces on x86-64.
-            const matchs0_safe = if (idxs0 >= prefix_lowest_index) matchs0 else &dummy;
-
-            // A short match in the prefix.
-            if (std.mem.readInt(u32, matchs0_safe[0..4], native_endian) ==
-                std.mem.readInt(u32, ip[0..4], native_endian) and matchs0_safe == matchs0)
+            // A long match at the next position.
+            if (idxl1 > prefix_lowest_index and
+                std.mem.readInt(u64, matchl1[0..8], native_endian) ==
+                    std.mem.readInt(u64, ip1[0..8], native_endian))
             {
-                break :search .search_next_long;
+                const l1len = ci.count(ip1 + 8, matchl1 + 8, iend) + 8;
+                if (l1len > m_length) {
+                    // Take the long match instead.
+                    ip = ip1;
+                    m_length = l1len;
+                    offset = @intCast(@intFromPtr(ip) - @intFromPtr(matchl1));
+                    matchs0 = matchl1;
+                }
             }
 
-            if (@intFromPtr(ip1) >= next_step) {
-                @prefetch(ip1 + 64, .{ .locality = 3 });
-                @prefetch(ip1 + 128, .{ .locality = 3 });
-                step += 1;
-                next_step += k_step_incr;
+            while (@intFromPtr(ip) > @intFromPtr(anchor) and
+                @intFromPtr(matchs0) > @intFromPtr(prefix_lowest) and
+                (ip - 1)[0] == (matchs0 - 1)[0])
+            {
+                ip -= 1;
+                matchs0 -= 1;
+                m_length += 1;
             }
-            ip = ip1;
-            ip1 += step;
+            continue :state .match_found;
+        },
+        // Requires ip, offset and m_length.
+        .match_found => {
+            offset_2 = offset_1;
+            offset_1 = offset;
 
-            hl0 = hl1;
-            idxl0 = idxl1;
-            matchl0 = matchl1;
-            if (builtin.cpu.arch == .aarch64) @prefetch(ip + 256, .{ .locality = 3 });
-            if (@intFromPtr(ip1) > ilimit) return cleanup(
-                rep,
-                offset_1,
-                offset_2,
-                offset_saved1,
-                offset_saved2,
-                iend,
-                anchor,
-            );
-        };
+            if (step < 4) {
+                // Writing ip1 is unsafe if it is at or past the position
+                // after this match. The shortest match is 4 bytes, so
+                // while the step from ip to ip1 is below 4, ip1 is before
+                // that position; this simpler test is faster.
+                hash_long[hl1] = @intCast(@intFromPtr(ip1) - @intFromPtr(base));
+            }
 
-        next: switch (found) {
-            .search_next_long => {
-                // A short match: look for a longer one.
-                m_length = ci.count(ip + 4, matchs0 + 4, iend) + 4;
-                offset = @intCast(@intFromPtr(ip) - @intFromPtr(matchs0));
+            const lit_length = @intFromPtr(ip) - @intFromPtr(anchor);
+            ci.storeSeq(seq_store, lit_length, anchor, iend, ci.offsetToOffbase(offset), m_length);
+            continue :state .match_stored;
+        },
+        .match_stored => {
+            ip += m_length;
+            anchor = ip;
 
-                // A long match at the next position.
-                if (idxl1 > prefix_lowest_index and
-                    std.mem.readInt(u64, matchl1[0..8], native_endian) ==
-                        std.mem.readInt(u64, ip1[0..8], native_endian))
+            if (@intFromPtr(ip) <= ilimit) {
+                // Candidates may be past iend - 8, so they go in here.
+                const index_to_insert = curr + 2;
+                hash_long[ci.hashPtr(base + index_to_insert, h_bits_l, 8)] = index_to_insert;
+                hash_long[ci.hashPtr(ip - 2, h_bits_l, 8)] =
+                    @intCast(@intFromPtr(ip - 2) - @intFromPtr(base));
+                hash_small[ci.hashPtr(base + index_to_insert, h_bits_s, mls)] = index_to_insert;
+                hash_small[ci.hashPtr(ip - 1, h_bits_s, mls)] =
+                    @intCast(@intFromPtr(ip - 1) - @intFromPtr(base));
+
+                // Immediate repeat offsets.
+                while (@intFromPtr(ip) <= ilimit and offset_2 > 0 and
+                    std.mem.readInt(u32, ip[0..4], native_endian) ==
+                        std.mem.readInt(u32, (ip - offset_2)[0..4], native_endian))
                 {
-                    const l1len = ci.count(ip1 + 8, matchl1 + 8, iend) + 8;
-                    if (l1len > m_length) {
-                        // Take the long match instead.
-                        ip = ip1;
-                        m_length = l1len;
-                        offset = @intCast(@intFromPtr(ip) - @intFromPtr(matchl1));
-                        matchs0 = matchl1;
-                    }
+                    const r_length = ci.count(ip + 4, ip + 4 - offset_2, iend) + 4;
+                    // Swapped through a temporary, as in the original: std.mem.swap goes
+                    // byte by byte, which splits both offsets into bytes for the whole loop.
+                    const tmp_off = offset_2;
+                    offset_2 = offset_1;
+                    offset_1 = tmp_off;
+                    const index: u32 = @intCast(@intFromPtr(ip) - @intFromPtr(base));
+                    hash_small[ci.hashPtr(ip, h_bits_s, mls)] = index;
+                    hash_long[ci.hashPtr(ip, h_bits_l, 8)] = index;
+                    ci.storeSeq(seq_store, 0, anchor, iend, ci.repcode1_to_offbase, r_length);
+                    ip += r_length;
+                    anchor = ip;
                 }
-
-                while (@intFromPtr(ip) > @intFromPtr(anchor) and
-                    @intFromPtr(matchs0) > @intFromPtr(prefix_lowest) and
-                    (ip - 1)[0] == (matchs0 - 1)[0])
-                {
-                    ip -= 1;
-                    matchs0 -= 1;
-                    m_length += 1;
-                }
-                continue :next .match_found;
-            },
-            // Requires ip, offset and m_length.
-            .match_found => {
-                offset_2 = offset_1;
-                offset_1 = offset;
-
-                if (step < 4) {
-                    // Writing ip1 is unsafe if it is at or past the position
-                    // after this match. The shortest match is 4 bytes, so
-                    // while the step from ip to ip1 is below 4, ip1 is before
-                    // that position; this simpler test is faster.
-                    hash_long[hl1] = @intCast(@intFromPtr(ip1) - @intFromPtr(base));
-                }
-
-                const lit_length = @intFromPtr(ip) - @intFromPtr(anchor);
-                ci.storeSeq(seq_store, lit_length, anchor, iend, ci.offsetToOffbase(offset), m_length);
-                continue :next .match_stored;
-            },
-            .match_stored => {
-                ip += m_length;
-                anchor = ip;
-
-                if (@intFromPtr(ip) <= ilimit) {
-                    // Candidates may be past iend - 8, so they go in here.
-                    const index_to_insert = curr + 2;
-                    hash_long[ci.hashPtr(base + index_to_insert, h_bits_l, 8)] = index_to_insert;
-                    hash_long[ci.hashPtr(ip - 2, h_bits_l, 8)] =
-                        @intCast(@intFromPtr(ip - 2) - @intFromPtr(base));
-                    hash_small[ci.hashPtr(base + index_to_insert, h_bits_s, mls)] = index_to_insert;
-                    hash_small[ci.hashPtr(ip - 1, h_bits_s, mls)] =
-                        @intCast(@intFromPtr(ip - 1) - @intFromPtr(base));
-
-                    // Immediate repeat offsets.
-                    while (@intFromPtr(ip) <= ilimit and offset_2 > 0 and
-                        std.mem.readInt(u32, ip[0..4], native_endian) ==
-                            std.mem.readInt(u32, (ip - offset_2)[0..4], native_endian))
-                    {
-                        const r_length = ci.count(ip + 4, ip + 4 - offset_2, iend) + 4;
-                        std.mem.swap(u32, &offset_1, &offset_2);
-                        const index: u32 = @intCast(@intFromPtr(ip) - @intFromPtr(base));
-                        hash_small[ci.hashPtr(ip, h_bits_s, mls)] = index;
-                        hash_long[ci.hashPtr(ip, h_bits_l, 8)] = index;
-                        ci.storeSeq(seq_store, 0, anchor, iend, ci.repcode1_to_offbase, r_length);
-                        ip += r_length;
-                        anchor = ip;
-                    }
-                }
-            },
-        }
+            }
+            continue :state .start;
+        },
     }
     return cleanup(rep, offset_1, offset_2, offset_saved1, offset_saved2, iend, anchor);
 }
@@ -665,7 +673,9 @@ inline fn compressBlockDoubleFastDictMatchStateGeneric(
                         {
                             const rep_end2 = if (rep_index2 < prefix_lowest_index) dict_end else iend;
                             const rep_length2 = ci.count2Segments(ip + 4, rep_match2 + 4, iend, rep_end2, prefix_lowest) + 4;
-                            std.mem.swap(u32, &offset_1, &offset_2);
+                            const tmp_off = offset_2;
+                            offset_2 = offset_1;
+                            offset_1 = tmp_off;
                             ci.storeSeq(seq_store, 0, anchor, iend, ci.repcode1_to_offbase, rep_length2);
                             hash_small[ci.hashPtr(ip, h_bits_s, mls)] = current2;
                             hash_long[ci.hashPtr(ip, h_bits_l, 8)] = current2;
@@ -885,7 +895,9 @@ fn compressBlockDoubleFastExtDictGeneric(
                 {
                     const rep_end2 = if (rep_index2 < prefix_start_index) dict_end else iend;
                     const rep_length2 = ci.count2Segments(ip + 4, rep_match2 + 4, iend, rep_end2, prefix_start) + 4;
-                    std.mem.swap(u32, &offset_1, &offset_2);
+                    const tmp_off = offset_2;
+                    offset_2 = offset_1;
+                    offset_1 = tmp_off;
                     ci.storeSeq(seq_store, 0, anchor, iend, ci.repcode1_to_offbase, rep_length2);
                     hash_small[ci.hashPtr(ip, h_bits_s, mls)] = current2;
                     hash_long[ci.hashPtr(ip, h_bits_l, 8)] = current2;

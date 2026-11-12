@@ -10,9 +10,15 @@
 //! the port and the original taking turns, after one untimed run of each, which also compares
 //! the two sides' frames byte for byte. Nothing is pinned to a core.
 //!
+//! On Linux, transparent huge pages are off for the process, so both sides' tables are on
+//! 4 KiB pages. With them on, whether a side's tables land on a huge page turns on where
+//! malloc places its context, which follows the order the two sides allocate in.
+//!
 //! Arguments after `--`: `--levels 1,3,19` picks the levels, `--runs N` sets the number of
 //! timed runs, `--quick` samples 4 MiB in all for every level and takes 3 runs (a smoke test),
-//! `--markdown` prints the table for doc/BENCHMARKS.md.
+//! `--markdown` prints the table for doc/BENCHMARKS.md, `--huge-pages` leaves transparent huge
+//! pages as the system has them, and `--original-first` has the original compress first in
+//! the warm-up, so that it allocates its tables first.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -44,22 +50,24 @@ const runs_default = 5;
 const runs_slow = 3;
 const runs_quick = 3;
 
-/// The multithreaded rows: these levels with `workers` workers. False while the port's
-/// `compress2` has no worker threads (it panics when `nb_workers` is set), which prints
-/// the rows as skipped; true runs them.
-const port_multithread_merged = false;
+/// The multithreaded rows: these levels with `workers` workers. True runs them; false
+/// prints them as skipped, for a port without worker threads.
+const port_multithread_merged = true;
 const workers = 4;
 const levels_multithread = [_]i32{ 3, 19 };
 
-/// What the original is built with, as `referenceLibrary` in build.zig has it.
+/// What the original is built with, as `benchReferenceLibrary` in build.zig has it.
 const original_flags = "-O3 -std=c99 -DXXH_NAMESPACE=ZSTD_ -DZSTD_MULTITHREAD " ++
-    "-DZSTD_LEGACY_SUPPORT=0 -fno-sanitize=undefined, plus huf_decompress_amd64.S on x86_64";
+    "-DZSTD_LEGACY_SUPPORT=0 -fno-sanitize=undefined -fPIC -fvisibility=hidden, " ++
+    "plus huf_decompress_amd64.S on x86_64, as a shared library on glibc";
 
 const Options = struct {
     levels: []const i32 = &levels_default,
     runs: ?usize = null,
     quick: bool = false,
     markdown: bool = false,
+    huge_pages: bool = false,
+    original_first: bool = false,
 };
 
 /// The frames a row compresses, each a piece of the corpus.
@@ -129,10 +137,14 @@ fn fatal(comptime format: []const u8, args: anytype) noreturn {
 const Port = struct {
     cctx: *zstd.CCtx,
 
-    fn init(row: Row) !Port {
+    fn init(row: Row, io: std.Io) !Port {
         const cctx = try zstd.CCtx.create(gpa);
         _ = try cctx.setParameter(.compression_level, row.level);
-        if (row.workers != 0) _ = try cctx.setParameter(.nb_workers, @intCast(row.workers));
+        if (row.workers != 0) {
+            // The workers take their locks through an `Io`.
+            cctx.setIo(io);
+            _ = try cctx.setParameter(.nb_workers, @intCast(row.workers));
+        }
         return .{ .cctx = cctx };
     }
 
@@ -198,8 +210,8 @@ fn timedPass(io: std.Io, side: anytype, set: Set, dst: []u8) Pass {
     return pass;
 }
 
-fn measure(io: std.Io, row: Row, set: Set, runs: usize) !Result {
-    const port: Port = try .init(row);
+fn measure(io: std.Io, row: Row, set: Set, runs: usize, original_allocates: bool) !Result {
+    const port: Port = try .init(row, io);
     defer port.deinit();
     const original: Original = try .init(row);
     defer original.deinit();
@@ -227,8 +239,16 @@ fn measure(io: std.Io, row: Row, set: Set, runs: usize) !Result {
         .checksum = 0,
     };
     for (set.pieces) |piece| {
-        const port_size = port.compress(port_out, piece);
-        const original_size = original.compress(original_out, piece);
+        // The side that compresses the first piece first allocates its tables first.
+        var port_size: usize = undefined;
+        var original_size: usize = undefined;
+        if (original_allocates) {
+            original_size = original.compress(original_out, piece);
+            port_size = port.compress(port_out, piece);
+        } else {
+            port_size = port.compress(port_out, piece);
+            original_size = original.compress(original_out, piece);
+        }
         result.port_bytes += port_size;
         result.original_bytes += original_size;
         const same = std.mem.eql(u8, port_out[0..port_size], original_out[0..original_size]);
@@ -372,9 +392,17 @@ const Table = struct {
         cells[6] = cellText(&storage[6], "{d:.1}", .{r.port.rate(r.input_bytes)});
         cells[7] = timingCell(&storage[7], r.original);
         cells[8] = timingCell(&storage[8], r.port);
-        const verdict = if (time_ratio < 1) "faster" else "slower";
-        const share = @abs(1 - time_ratio) * 100;
-        cells[9] = cellText(&storage[9], "{d:.3}, {d:.1}% {s}", .{ time_ratio, share, verdict });
+        // When the two sides' spreads overlap, the runs do not settle which side is faster.
+        const overlap = r.port.min_ns <= r.original.max_ns and r.original.min_ns <= r.port.max_ns;
+        if (overlap) {
+            cells[9] = cellText(&storage[9], "{d:.3}, within noise", .{time_ratio});
+        } else {
+            const verdict = if (time_ratio < 1) "faster" else "slower";
+            const share = @abs(1 - time_ratio) * 100;
+            cells[9] = cellText(&storage[9], "{d:.3}, {d:.1}% {s}", .{
+                time_ratio, share, verdict,
+            });
+        }
         try self.line(&cells);
         if (r.frames_differing != 0) {
             try self.note("FRAME DIFFERS: {d} of {d} frames differ from the original's " ++
@@ -432,6 +460,10 @@ fn parseOptions(arena: std.mem.Allocator, args: []const [:0]const u8) !Options {
             options.quick = true;
         } else if (std.mem.eql(u8, arg, "--markdown")) {
             options.markdown = true;
+        } else if (std.mem.eql(u8, arg, "--huge-pages")) {
+            options.huge_pages = true;
+        } else if (std.mem.eql(u8, arg, "--original-first")) {
+            options.original_first = true;
         } else if (std.mem.eql(u8, arg, "--runs")) {
             i += 1;
             if (i == args.len) fatal("--runs needs a number", .{});
@@ -505,6 +537,9 @@ pub fn main(init: std.process.Init) !void {
     var stdout = std.Io.File.stdout().writerStreaming(io, &buffer);
     const w = &stdout.interface;
 
+    const thp_off = builtin.os.tag == .linux and !options.huge_pages;
+    if (thp_off) _ = try std.posix.prctl(.SET_THP_DISABLE, .{ 1, 0, 0, 0 });
+
     const corpus = (try Corpus.load(io)) orelse {
         try w.writeAll("The Silesia corpus is not fetched (its directory is empty or missing), " ++
             "so there is nothing to time; `zig build bench` fetches it when the network is up.\n");
@@ -550,6 +585,10 @@ pub fn main(init: std.process.Init) !void {
     try info(w, markdown, "original: zstd {d}.{d}.{d} from reference/, same target: {s}", .{
         version / 10000, version / 100 % 100, version % 100, original_flags,
     });
+    try info(w, markdown, "memory: transparent huge pages {s}; the {s} allocates first", .{
+        if (thp_off) "off for the process" else "as the system has them",
+        if (options.original_first) "original" else "port",
+    });
     try info(w, markdown, "command: {s}", .{command.written()});
     try info(w, markdown, "corpus: Silesia, {d} files, {d:.1} MB; the whole-file rows take " ++
         "all of it as {d} frames, the sample rows {d:.1} MB as {d} frames", .{
@@ -562,7 +601,9 @@ pub fn main(init: std.process.Init) !void {
     try info(w, markdown, "method: one `compress2` a frame, a reused context per side; an " ++
         "untimed warm-up of each side, then the median of {s}, the sides taking turns; " ++
         "MB are 1e6 input bytes, the verdict is the time saved or added as a share of " ++
-        "the original's", .{runs_text});
+        "the original's, or within noise when the two sides' min-max spreads overlap", .{
+        runs_text,
+    });
     try w.writeAll("\n");
 
     var rows: std.ArrayList(Row) = .empty;
@@ -591,7 +632,8 @@ pub fn main(init: std.process.Init) !void {
             continue;
         }
         const set = if (row.whole) whole else sample;
-        const result = try measure(io, row, set, runsFor(options, row.level));
+        const runs = runsFor(options, row.level);
+        const result = try measure(io, row, set, runs, options.original_first);
         try table.result(label, result);
         checksum += result.checksum;
         rows_differing += @intFromBool(result.frames_differing != 0);

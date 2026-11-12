@@ -432,6 +432,13 @@ fn insertionSort(huff_node: []NodeElt, low: i32, high: i32) void {
     }
 }
 
+/// `HUF_swapNodes`, through a temporary: std.mem.swap goes byte by byte.
+inline fn swapNodes(a: *NodeElt, b: *NodeElt) void {
+    const tmp = a.*;
+    a.* = b.*;
+    b.* = tmp;
+}
+
 /// `HUF_quickSortPartition`: around the rightmost element.
 fn quickSortPartition(arr: []NodeElt, low: i32, high: i32) i32 {
     const pivot = arr[@intCast(high)].count;
@@ -440,10 +447,10 @@ fn quickSortPartition(arr: []NodeElt, low: i32, high: i32) i32 {
     while (j < high) : (j += 1) {
         if (arr[@intCast(j)].count > pivot) {
             i += 1;
-            std.mem.swap(NodeElt, &arr[@intCast(i)], &arr[@intCast(j)]);
+            swapNodes(&arr[@intCast(i)], &arr[@intCast(j)]);
         }
     }
-    std.mem.swap(NodeElt, &arr[@intCast(i + 1)], &arr[@intCast(high)]);
+    swapNodes(&arr[@intCast(i + 1)], &arr[@intCast(high)]);
     return i + 1;
 }
 
