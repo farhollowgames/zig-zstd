@@ -831,3 +831,80 @@ int reference_optEntropy(const void* sample, size_t sampleSize, unsigned seed,
     }
     return 0;
 }
+
+/* Multithreaded compression, driven through zstdmt_compress.c's entry
+ * points as ZSTD_compressStream2 drives them. The parameters are resolved
+ * as ZSTD_CCtx_init_compressStream2 resolves them, with copies of its static
+ * helpers; the dictionary's dedicated search is assumed off. */
+#include "compress/zstdmt_compress.h"
+
+static ZSTD_ParamSwitch_e reference_resolveRowMatchFinderMode(ZSTD_ParamSwitch_e mode,
+                                                              const ZSTD_compressionParameters* cParams)
+{
+    if (mode != ZSTD_ps_auto) return mode;
+    mode = ZSTD_ps_disable;
+    if (!(cParams->strategy >= ZSTD_greedy && cParams->strategy <= ZSTD_lazy2)) return mode;
+    if (cParams->windowLog > 14) mode = ZSTD_ps_enable;
+    return mode;
+}
+
+static ZSTD_ParamSwitch_e reference_resolveBlockSplitterMode(ZSTD_ParamSwitch_e mode,
+                                                             const ZSTD_compressionParameters* cParams)
+{
+    if (mode != ZSTD_ps_auto) return mode;
+    return (cParams->strategy >= ZSTD_btopt && cParams->windowLog >= 17) ? ZSTD_ps_enable : ZSTD_ps_disable;
+}
+
+static ZSTD_ParamSwitch_e reference_resolveEnableLdm(ZSTD_ParamSwitch_e mode,
+                                                     const ZSTD_compressionParameters* cParams)
+{
+    if (mode != ZSTD_ps_auto) return mode;
+    return (cParams->strategy >= ZSTD_btopt && cParams->windowLog >= 27) ? ZSTD_ps_enable : ZSTD_ps_disable;
+}
+
+static ZSTD_ParamSwitch_e reference_resolveExternalRepcodeSearch(ZSTD_ParamSwitch_e value, int cLevel)
+{
+    if (value != ZSTD_ps_auto) return value;
+    return cLevel < 10 ? ZSTD_ps_disable : ZSTD_ps_enable;
+}
+
+static int reference_shouldAttachDict(const ZSTD_CDict* cdict, const ZSTD_CCtx_params* params,
+                                      U64 pledgedSrcSize)
+{
+    static const size_t attachDictSizeCutoffs[ZSTD_STRATEGY_MAX + 1] = {
+        8 KB, 8 KB, 16 KB, 32 KB, 32 KB, 32 KB, 32 KB, 32 KB, 8 KB, 8 KB };
+    size_t const cutoff = attachDictSizeCutoffs[ZSTD_getCParamsFromCDict(cdict).strategy];
+    return (pledgedSrcSize <= cutoff || pledgedSrcSize == ZSTD_CONTENTSIZE_UNKNOWN
+            || params->attachDictPref == ZSTD_dictForceAttach)
+        && params->attachDictPref != ZSTD_dictForceCopy
+        && !params->forceWindow;
+}
+
+/* `params` as ZSTD_CCtx_init_compressStream2 makes them for a frame of
+ * `pledgedSrcSize` with a dictionary of `dictSize` bytes, or `cdict`. */
+void reference_mt_resolveParams(ZSTD_CCtx_params* params, unsigned long long pledgedSrcSize,
+                                size_t dictSize, const ZSTD_CDict* cdict)
+{
+    ZSTD_CParamMode_e const mode = (cdict != NULL && reference_shouldAttachDict(cdict, params, pledgedSrcSize))
+        ? ZSTD_cpm_attachDict : ZSTD_cpm_noAttachDict;
+    params->cParams = ZSTD_getCParamsFromCCtxParams(params, pledgedSrcSize, dictSize, mode);
+    params->postBlockSplitter = reference_resolveBlockSplitterMode(params->postBlockSplitter, &params->cParams);
+    params->ldmParams.enableLdm = reference_resolveEnableLdm(params->ldmParams.enableLdm, &params->cParams);
+    params->useRowMatchFinder = reference_resolveRowMatchFinderMode(params->useRowMatchFinder, &params->cParams);
+    if (params->maxBlockSize == 0) params->maxBlockSize = ZSTD_BLOCKSIZE_MAX;
+    params->searchForExternalRepcodes = reference_resolveExternalRepcodeSearch(
+        params->searchForExternalRepcodes, params->compressionLevel);
+}
+
+ZSTDMT_CCtx* reference_mt_create(unsigned nbWorkers, ZSTD_threadPool* pool)
+{
+    return ZSTDMT_createCCtx_advanced(nbWorkers, ZSTD_defaultCMem, pool);
+}
+
+size_t reference_mt_initCStream(ZSTDMT_CCtx* mtctx, const void* dict, size_t dictSize,
+                                int dictContentType, const ZSTD_CDict* cdict,
+                                const ZSTD_CCtx_params* params, unsigned long long pledgedSrcSize)
+{
+    return ZSTDMT_initCStream_internal(mtctx, dict, dictSize, (ZSTD_dictContentType_e)dictContentType,
+                                       cdict, *params, pledgedSrcSize);
+}

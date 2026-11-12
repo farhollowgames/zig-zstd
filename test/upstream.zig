@@ -443,7 +443,6 @@ pub extern fn reference_fseGetMaxNbBits(ct: [*]const c_uint, symbol: c_uint) c_u
 // zstd_ldm.c. Parameters go as six numbers: enable, hash log, bucket size
 // log, minimum match length, hash rate log, window log.
 
-
 /// The original's `rawSeq`, a long distance match candidate.
 pub const RawSeq = extern struct {
     offset: u32,
@@ -623,3 +622,61 @@ pub extern fn reference_optEntropy(
     ml_ctable: [*]u32,
     ll_ctable: [*]u32,
 ) c_int;
+
+// Multithreaded compression (zstdmt_compress.c), driven as
+// ZSTD_compressStream2 drives it.
+
+pub const ZSTDMT_CCtx = opaque {};
+pub const ZSTD_threadPool = opaque {};
+
+pub const ZSTD_frameProgression = extern struct {
+    ingested: c_ulonglong,
+    consumed: c_ulonglong,
+    produced: c_ulonglong,
+    flushed: c_ulonglong,
+    current_job_id: c_uint,
+    nb_active_workers: c_uint,
+};
+
+pub extern fn ZSTD_createCCtxParams() ?*ZSTD_CCtx_params;
+pub extern fn ZSTD_freeCCtxParams(params: ?*ZSTD_CCtx_params) usize;
+pub extern fn ZSTD_CCtxParams_init(params: *ZSTD_CCtx_params, level: c_int) usize;
+pub extern fn ZSTD_CCtxParams_setParameter(params: *ZSTD_CCtx_params, param: c_uint, value: c_int) usize;
+pub extern fn ZSTD_CCtxParams_getParameter(params: *const ZSTD_CCtx_params, param: c_uint, value: *c_int) usize;
+pub extern fn ZSTD_createThreadPool(nb_threads: usize) ?*ZSTD_threadPool;
+pub extern fn ZSTD_freeThreadPool(pool: ?*ZSTD_threadPool) void;
+
+/// `ZSTDMT_createCCtx_advanced` with the default allocator.
+pub extern fn reference_mt_create(nb_workers: c_uint, pool: ?*ZSTD_threadPool) ?*ZSTDMT_CCtx;
+pub extern fn ZSTDMT_freeCCtx(mtctx: ?*ZSTDMT_CCtx) usize;
+pub extern fn ZSTDMT_sizeof_CCtx(mtctx: ?*ZSTDMT_CCtx) usize;
+/// The parameters as `ZSTD_CCtx_init_compressStream2` resolves them.
+pub extern fn reference_mt_resolveParams(
+    params: *ZSTD_CCtx_params,
+    pledged_src_size: c_ulonglong,
+    dict_size: usize,
+    cdict: ?*const ZSTD_CDict,
+) void;
+/// `ZSTDMT_initCStream_internal`, with the parameters passed by pointer.
+pub extern fn reference_mt_initCStream(
+    mtctx: *ZSTDMT_CCtx,
+    dict: ?*const anyopaque,
+    dict_size: usize,
+    dict_content_type: c_int,
+    cdict: ?*const ZSTD_CDict,
+    params: *const ZSTD_CCtx_params,
+    pledged_src_size: c_ulonglong,
+) usize;
+pub extern fn ZSTDMT_compressStream_generic(
+    mtctx: *ZSTDMT_CCtx,
+    output: *ZSTD_outBuffer,
+    input: *ZSTD_inBuffer,
+    end_op: c_uint,
+) usize;
+pub extern fn ZSTDMT_nextInputSizeHint(mtctx: *const ZSTDMT_CCtx) usize;
+pub extern fn ZSTDMT_getFrameProgression(mtctx: *ZSTDMT_CCtx) ZSTD_frameProgression;
+pub extern fn ZSTDMT_toFlushNow(mtctx: *ZSTDMT_CCtx) usize;
+pub extern fn ZSTDMT_updateCParams_whileCompressing(
+    mtctx: *ZSTDMT_CCtx,
+    params: *const ZSTD_CCtx_params,
+) void;
