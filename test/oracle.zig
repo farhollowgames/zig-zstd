@@ -31,3 +31,7 @@ test "the harness: the original's frames decode through std and the original" {
     defer common.gpa.free(golden);
     try std.testing.expect(golden.len > 0);
 }
+
+test {
+    _ = @import("entropy_test.zig");
+}
