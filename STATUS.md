@@ -16,6 +16,42 @@ The original is pinned in `reference/` (see `reference/README.md`): tag
 `v1.5.7`, commit `f8745da6ff1ad1e7bab384bd1f9d742439278e99`. `doc/porting.md`
 says how the code maps to it.
 
+## Step 4 report (11 November 2026)
+
+**Done.** zstd 1.5.7 pinned in `reference/` (v1.5.7, f8745da6). Ported and merged on `main`:
+the entropy coders, the shared types and workspace, every strategy (fast, dfast, greedy,
+lazy, lazy2 with the row matcher, btlazy2, btopt, btultra, btultra2), long-distance
+matching, the superblock and the pre-splitter, zstd_compress.c's one-shot and buffer-less
+paths with dictionaries, CDicts and the external sequence producer, and zstdmt with its
+pool. The streaming half (CStream, `compressStream2` and its MT path, the sequence API) and
+the corpus tests are on `port/stream`, not merged yet.
+
+**Tests.** `zig build test -Dcorpus=false` on `main`: 260 of 260 pass (unit, `oracle`,
+`oracle-scalar`), each fuzz test at 1,000 cases. Frames are compared byte for byte with the
+original's, and every frame decodes through std's decoder and the original's.
+
+**Speed and ratio** (Silesia, one thread, `zig build bench`, before the performance pass;
+`doc/BENCHMARKS.md`). Ratios are equal at every level, since the frames are equal.
+
+| levels | port against the original |
+| --- | --- |
+| -5, -1 | 2% to 3% faster |
+| 1 | 10% slower (whole files, noisy) |
+| 2 | equal |
+| 3, 4 (dfast) | 32% and 23% slower |
+| 5 to 12 | 6% faster to 6% slower |
+| 13 to 22 | 1% to 5% faster |
+| 19 | 2.8% faster (8.3 against 8.0 MB/s, ratio 2.817) |
+
+**Left out, awaiting the author's approval:** the list at the end of this file (dictionary
+training, decompression and frame readers, `ZSTD_customMem`, BMI2 dispatch, the strategy
+exclusion switches, `ZSTD_COMPRESS_HEAPMODE`, tracing, debug and sanitizer switches, C
+build configuration, `ZSTD_C_PREDICT`, the fuzzing mode, `ZSTD_RESIZE_SEQPOOL`).
+
+**For the author.** std's decoder panics when asked to verify a checksum, and takes no
+dictionaries (details below). `test/data/snapshot.bin` is a snapshot pack, not B+ tree
+pages. Open points for the review are listed below.
+
 ## Resume notes
 
 Builds: one at a time, `timeout 3000 systemd-run --user --scope -q -p MemoryMax=6G
