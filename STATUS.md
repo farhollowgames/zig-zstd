@@ -117,6 +117,31 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
     on 64-bit targets; the tests take a 64-bit `usize` too (`1 << 40` output windows in
     `stream_test.zig` and `mt_test.zig`, a 64-bit constant at `lazy_test.zig:428`).
     Nothing builds or tests a 32-bit target, though `params.zig` keeps the 32-bit limits.
+    **Partly fixed** in `af1aa14`: `zig build check -Dtarget=x86-linux-musl` compiles,
+    and `test -Dtarget=x86-linux-musl -Dcorpus=false` runs natively here (22 minutes):
+    58 of 58 unit tests, and 116 of 124 oracle tests in each binary (4 skipped, the
+    64-bit-only ones). Left, stopped at the time box:
+    - **`p - window.base` without wrap-around** (55 sites: `fast.zig` 23,
+      `double_fast.zig` 14, `compress_internal.zig` 7, `compress.zig` 5, `ldm.zig` 3,
+      `opt.zig` 2, `lazy.zig` 1). A reused context keeps its indexes across frames, so
+      `base` sits that far before the next input; with an input at a low address
+      (`compressCCtx: edge cases`, a constant in `.rodata`), `base` wraps below 0 and
+      `@intCast(@intFromPtr(p) - @intFromPtr(base))` panics (`buildSeqStore`,
+      `compress.zig:3101`), where the original's pointer difference cast to U32 wraps.
+      Fix: `@truncate(... -% ...)`, as the window functions already do; most sites are
+      in the match finders, so after the perf pass merges.
+    - **Tables past the address space**: a hash or chain log of 30 (4 GiB of u32) is in
+      bounds on 32-bit, and the original's size_t sums wrap to a workspace too small for
+      its tables; the port's estimate panics with an integer overflow
+      (`estimateCCtxSizeUsingCCtxParamsInternal`, from `setParameter, getParameter:
+      every parameter over its bounds`). Upstream's own limit; the test should skip
+      those values on 32-bit, once what the original returns there is known.
+    - `initStatic: workspaces of the estimated size, and one byte less` fails an
+      `expect` with no output (likely a workspace of the level-22 estimate that a
+      32-bit process cannot allocate twice); not yet looked into.
+    - `compressStream2: fuzzed calls ...` (seed 984, case 479) gave the same raw value
+      on both sides, 2^32 - 113, in the original's error range; the harness now takes
+      that as the same, but why the hint wraps on 32-bit only is not yet known.
   - The benchmark: the original is a shared library built without upstream's own
     `-fvisibility=hidden` (`reference/lib/Makefile:147`), so 460 call sites into its
     own functions (`HIST_countFast_wksp`, `FSE_buildCTable_wksp`, `HUF_buildCTable_wksp`,
@@ -129,7 +154,10 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
     400 KB from one generated buffer, and dictionaries stay at or below 110 KB; no test
     sets a window log above 25, which is where the overflow above lives. `oracle-scalar`
     runs other port code only in the row matcher's tag compare and the sequence
-    conversion.
+    conversion. **Fixed** in `7cc99a7`: fresh contexts reach window log 27, hash and
+    chain logs 26, long distance hash log 27 and every rate, inputs reach 3 MiB and
+    dictionaries (all four ways in) 20 MiB; about a minute per binary, at most 310 MB.
+    The Canterbury corpus already runs at every positive level, so at every strategy.
   - Probes that found nothing: pledged sizes near 2^64 with dictionaries, CDicts,
     prefixes and workers; LDM hash logs 25 to 27, bucket log 8, minimum matches 4 to
     4096, rates 0 to 25, window logs 27 to 31; size hints near 2^31 with dictionaries;
@@ -147,9 +175,10 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
 
 **To resume.**
 1. Step 7 on `review/perf-and-skeptic` (under way): the window sums, the pool docs,
-   the copy docs and the test harness are fixed (marked above). Left: 32-bit targets,
-   the fuzz ranges and the corpus levels, `-Doverflow-correct-frequently` in
-   `doc/TESTING.md`, then the full suite with the corpora and `-Dskeptic` once.
+   the copy docs, the test harness and the fuzz ranges are fixed, and 32-bit partly
+   (marked above). Left: the `-Doverflow-correct-frequently` run into
+   `doc/TESTING.md`, the full suite with the corpora and `-Dskeptic` once; then the
+   32-bit points above, after the perf pass merges (they touch the match finders).
 2. Merge `review/perf-2` into `review/perf-and-skeptic`; run the full suite with the
    corpora; set `port_multithread_merged = true` in bench/bench.zig if the perf pass has
    not; run the full benchmark pinned to one core and replace the tables in
