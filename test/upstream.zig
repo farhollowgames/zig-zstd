@@ -172,6 +172,44 @@ pub extern fn reference_genBuffer(
     seed: c_uint,
 ) void;
 
+/// The original's `SeqDef`, one stored sequence.
+pub const SeqDef = extern struct {
+    off_base: u32,
+    lit_length: u16,
+    ml_base: u16,
+};
+
+/// The original's block compressor run on one block, after the setup of a
+/// fresh compression (test/reference.c). `dict_kind`: 0 none, 1 an external
+/// dictionary, 2 an attached one. Returns the size of the last literals.
+pub extern fn reference_blockTest(
+    cparams: *const ZSTD_compressionParameters,
+    dict_kind: c_int,
+    dict: ?*const anyopaque,
+    dict_size: usize,
+    dict_cparams: *const ZSTD_compressionParameters,
+    src: ?*const anyopaque,
+    src_size: usize,
+    hash_table: [*]u32,
+    chain_table: [*]u32,
+    dict_hash_table: ?[*]u32,
+    dict_chain_table: ?[*]u32,
+    seqs: [*]SeqDef,
+    seq_capacity: usize,
+    lits: [*]u8,
+    lit_capacity: usize,
+    rep: *[3]u32,
+    nb_seq: *usize,
+    nb_lit: *usize,
+    long_length_type: *u32,
+    long_length_pos: *u32,
+) usize;
+
+/// The compression parameters `cctx` applied in its last compression.
+pub extern fn reference_appliedCParams(
+    cctx: *const ZSTD_CCtx,
+    cparams: *ZSTD_compressionParameters,
+) void;
 // The entropy coders' internal functions, exported by the library, and the
 // helpers in test/reference.c that reach their inline parts.
 
@@ -400,44 +438,6 @@ pub extern fn reference_fseBitCost(
     accuracy_log: c_uint,
 ) c_uint;
 pub extern fn reference_fseGetMaxNbBits(ct: [*]const c_uint, symbol: c_uint) c_uint;
-/// The original's `SeqDef`, one stored sequence.
-pub const SeqDef = extern struct {
-    off_base: u32,
-    lit_length: u16,
-    ml_base: u16,
-};
-
-/// The original's block compressor run on one block, after the setup of a
-/// fresh compression (test/reference.c). `dict_kind`: 0 none, 1 an external
-/// dictionary, 2 an attached one. Returns the size of the last literals.
-pub extern fn reference_blockTest(
-    cparams: *const ZSTD_compressionParameters,
-    dict_kind: c_int,
-    dict: ?*const anyopaque,
-    dict_size: usize,
-    dict_cparams: *const ZSTD_compressionParameters,
-    src: ?*const anyopaque,
-    src_size: usize,
-    hash_table: [*]u32,
-    chain_table: [*]u32,
-    dict_hash_table: ?[*]u32,
-    dict_chain_table: ?[*]u32,
-    seqs: [*]SeqDef,
-    seq_capacity: usize,
-    lits: [*]u8,
-    lit_capacity: usize,
-    rep: *[3]u32,
-    nb_seq: *usize,
-    nb_lit: *usize,
-    long_length_type: *u32,
-    long_length_pos: *u32,
-) usize;
-
-/// The compression parameters `cctx` applied in its last compression.
-pub extern fn reference_appliedCParams(
-    cctx: *const ZSTD_CCtx,
-    cparams: *ZSTD_compressionParameters,
-) void;
 
 // Long distance matching: helpers in test/reference.c over the original's
 // zstd_ldm.c. Parameters go as six numbers: enable, hash log, bucket size
