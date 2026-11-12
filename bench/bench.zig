@@ -50,10 +50,9 @@ const runs_default = 5;
 const runs_slow = 3;
 const runs_quick = 3;
 
-/// The multithreaded rows: these levels with `workers` workers. False while the port's
-/// `compress2` has no worker threads (it panics when `nb_workers` is set), which prints
-/// the rows as skipped; true runs them.
-const port_multithread_merged = false;
+/// The multithreaded rows: these levels with `workers` workers. True runs them; false
+/// prints them as skipped, for a port without worker threads.
+const port_multithread_merged = true;
 const workers = 4;
 const levels_multithread = [_]i32{ 3, 19 };
 
@@ -138,10 +137,14 @@ fn fatal(comptime format: []const u8, args: anytype) noreturn {
 const Port = struct {
     cctx: *zstd.CCtx,
 
-    fn init(row: Row) !Port {
+    fn init(row: Row, io: std.Io) !Port {
         const cctx = try zstd.CCtx.create(gpa);
         _ = try cctx.setParameter(.compression_level, row.level);
-        if (row.workers != 0) _ = try cctx.setParameter(.nb_workers, @intCast(row.workers));
+        if (row.workers != 0) {
+            // The workers take their locks through an `Io`.
+            cctx.setIo(io);
+            _ = try cctx.setParameter(.nb_workers, @intCast(row.workers));
+        }
         return .{ .cctx = cctx };
     }
 
@@ -208,7 +211,7 @@ fn timedPass(io: std.Io, side: anytype, set: Set, dst: []u8) Pass {
 }
 
 fn measure(io: std.Io, row: Row, set: Set, runs: usize, original_allocates: bool) !Result {
-    const port: Port = try .init(row);
+    const port: Port = try .init(row, io);
     defer port.deinit();
     const original: Original = try .init(row);
     defer original.deinit();
