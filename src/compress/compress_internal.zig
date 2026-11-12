@@ -70,7 +70,7 @@ pub const CDict = @import("compress.zig").CDict;
 /// The original's `ZSTD_threadPool` (POOL_ctx), from pool.c.
 pub const ThreadPool = @import("../common/pool.zig").ThreadPool;
 /// The original's `ZSTDMT_CCtx`, from zstdmt_compress.c.
-pub const ZstdmtCCtx = opaque {};
+pub const ZstdmtCCtx = @import("zstdmt.zig").ZstdmtCCtx;
 
 /// The value a sequence producer returns when it fails, the original's
 /// `ZSTD_SEQUENCE_PRODUCER_ERROR`.
