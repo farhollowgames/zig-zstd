@@ -50,7 +50,11 @@ pub fn expectSameResult(code: usize, result: anytype) !void {
     const same = switch (expected) {
         .size => |size| actual == .size and (no_value or actual.size == size),
         // A size the original computes with wrap-around can land in its
-        // error range, as an input size hint can; the port gives the same.
+        // error range; the port gives the same raw value. `compressStream`
+        // with a stable input that has not started its frame returns the
+        // last frame's block size less the input held back, which wraps
+        // when that input is larger (see `compressStream: a stable input's
+        // size hint after a smaller frame`). It wraps on 64-bit targets too.
         .error_code => |e| (actual == .error_code and actual.error_code == e) or
             (actual == .size and actual.size == code),
     };

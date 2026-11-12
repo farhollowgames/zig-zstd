@@ -516,6 +516,34 @@ test "compressStream2: fuzzed calls, both buffer modes, parameters, dictionaries
     }
 }
 
+test "compressStream: a stable input's size hint after a smaller frame" {
+    // The hint is the last frame's block size less the input held back:
+    // 23,605 less 23,718, which wraps to the original's error range on
+    // every target. Both sides return the same raw value.
+    const pair = try Pair.init();
+    defer pair.deinit();
+    const src = try common.generated(100_000, 0.5, 0.3, 507);
+    defer gpa.free(src);
+    try setModes(pair, true, true);
+    var first = try Stream.init(pair, src[0..23_605], c.ZSTD_compressBound(src.len), true, true);
+    defer first.deinit();
+    try testing.expect(try first.finish(null, whole_buffer));
+    try first.expectFrame(null);
+
+    var upstream_out: [64]u8 = undefined;
+    var port_out: [64]u8 = undefined;
+    var upstream_output: c.ZSTD_outBuffer = .{ .dst = &upstream_out, .size = 64, .pos = 0 };
+    var upstream_input: c.ZSTD_inBuffer = .{ .src = src.ptr, .size = 23_718, .pos = 0 };
+    const code = c.ZSTD_compressStream(pair.upstream, &upstream_output, &upstream_input);
+    var port_output: zstd.OutBuffer = .{ .dst = &port_out };
+    var port_input: zstd.InBuffer = .{ .src = src[0..23_718] };
+    const result = pair.port.compressStream(&port_output, &port_input);
+    try testing.expectEqual(@as(usize, 0) -% 113, code);
+    try testing.expect(c.ZSTD_isError(code) != 0);
+    try testing.expectEqual(code, try result);
+    try expectSameResult(code, result);
+}
+
 test "compressStream2: a pledged size, right and wrong" {
     const pair = try Pair.init();
     defer pair.deinit();

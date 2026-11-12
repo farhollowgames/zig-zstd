@@ -167,6 +167,14 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
     - `compressStream2: fuzzed calls ...` (seed 984, case 479) gave the same raw value
       on both sides, 2^32 - 113, in the original's error range; the harness now takes
       that as the same, but why the hint wraps on 32-bit only is not yet known.
+      **Explained**: it is the original's behaviour, and the port matches it on every
+      target. `compressStream` with a stable input that has not started its frame
+      returns the last frame's block size less the input held back (applied
+      parameters from the frame before), which wraps when that input is larger: there
+      23,605 less 23,718. It shows on 32-bit only because the fuzzer draws with
+      `uintLessThan(usize, ...)`, so the cases differ between targets. `compressStream:
+      a stable input's size hint after a smaller frame` makes the case on both
+      targets, and `expectSameResult` says why it takes the raw value.
   - The benchmark: the original is a shared library built without upstream's own
     `-fvisibility=hidden` (`reference/lib/Makefile:147`), so 460 call sites into its
     own functions (`HIST_countFast_wksp`, `FSE_buildCTable_wksp`, `HUF_buildCTable_wksp`,
