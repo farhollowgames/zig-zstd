@@ -107,6 +107,11 @@ const Found = enum {
     match_stored,
 };
 
+// The noDict, dictMatchState and extDict variants below are each a function
+// of their own per minimum match, page-aligned (`hot_code_align`), as the
+// fast block compressor's are: inlined into their dispatchers, a variant's
+// loop could straddle a page boundary.
+
 /// `ZSTD_compressBlock_doubleFast_noDict_generic`.
 noinline fn compressBlockDoubleFastNoDictGeneric(
     ms: *MatchState,
@@ -698,8 +703,6 @@ noinline fn compressBlockDoubleFastDictMatchStateGeneric(
 }
 
 /// `ZSTD_compressBlock_doubleFast`: the block compressor without a dictionary.
-/// Each variant is a function of its own, page-aligned (`hot_code_align`),
-/// as the fast block compressor's are.
 pub fn compressBlockDoubleFast(
     ms: *MatchState,
     seq_store: *SeqStore,

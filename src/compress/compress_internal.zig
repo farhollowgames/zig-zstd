@@ -18,13 +18,13 @@ const assert = std.debug.assert;
 const native_endian = builtin.cpu.arch.endian();
 const rep_num = zstd_internal.rep_num;
 const min_match = zstd_internal.min_match;
+pub const hot_code_align = zstd_internal.hot_code_align;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 pub const search_strength = 8;
-pub const hot_code_align = zstd_internal.hot_code_align;
 pub const hash_read_size = 8;
 /// For btlazy2, index 1 marks an unsorted candidate. A real successor at
 /// index 1 could be taken for it; the candidate is then only sorted again.

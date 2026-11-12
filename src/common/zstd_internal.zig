@@ -2,20 +2,12 @@
 //! parts, from the original's zstd_internal.h.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const opt_num = 1 << 12;
 /// The number of repeat offsets.
 pub const rep_num = 3;
 
-/// The alignment of the functions that run the compressor's inner loops (the
-/// block compressors, the match searches, the histogram and the entropy
-/// coders): a 4 KiB page. A loop that straddles a page boundary misses in the
-/// instruction cache on every pass on some CPUs (Zen 5 here, from the cache
-/// counters), so where the linker happened to place a function moved its
-/// speed by up to 4%. Page-aligned, a function under 4 KiB never crosses a
-/// page, and a larger one keeps the same layout within its pages wherever it
-/// lands. The cost is padding in the binary, never fetched.
-pub const hot_code_align = 4096;
 pub const rep_start_value = [rep_num]u32{ 1, 4, 8 };
 
 pub const window_log_absolute_min = 10;
@@ -27,6 +19,17 @@ pub const block_header_size = 3;
 pub const frame_checksum_size = 4;
 
 pub const BlockType = enum(u2) { raw, rle, compressed, reserved };
+
+/// The alignment of the functions that run the compressor's inner loops (the
+/// block compressors, the match searches, the histogram and the entropy
+/// coders): a 4 KiB page. A loop that straddles a page boundary misses in the
+/// instruction cache far more often on some CPUs (Zen 5 here, from the cache
+/// counters), so where the linker happened to place a function moved whole
+/// benchmark rows by up to 3%. Page-aligned, a function under 4 KiB never
+/// crosses a page, and a larger one keeps the same layout within its pages
+/// wherever it lands. The cost is padding in the binary, never fetched, so
+/// ReleaseSmall leaves functions unaligned.
+pub const hot_code_align = if (builtin.mode == .small) 1 else 4096;
 
 pub const min_sequences_size = 1;
 /// The smallest compressed block: one byte of literals header, one of sequences.

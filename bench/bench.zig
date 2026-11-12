@@ -529,7 +529,8 @@ fn rowLabel(arena: std.mem.Allocator, row: Row) ![]const u8 {
 pub fn main(init: std.process.Init) !void {
     // `-Dbench-code-shift`: dead bytes jumped over, which change where the port's functions
     // land in the binary, to test how much a row owes to code placement.
-    if (bench_options.code_shift > 0 and builtin.cpu.arch == .x86_64) {
+    if (bench_options.code_shift > 0) {
+        if (builtin.cpu.arch != .x86_64) @compileError("-Dbench-code-shift is x86-64 only");
         const skip = std.fmt.comptimePrint("{d}", .{bench_options.code_shift});
         asm volatile ("jmp 1f\n.skip " ++ skip ++ ", 0xcc\n1:\n");
     }
