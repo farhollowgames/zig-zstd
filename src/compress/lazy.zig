@@ -1600,7 +1600,7 @@ fn compressBlockLazyGeneric(
     const dict_lowest: [*]const u8 = if (is_dxs) dict_base + dict_lowest_index else undefined;
     const dict_end: [*]const u8 = if (is_dxs) dms.?.window.next_src else undefined;
     const dict_index_delta: u32 = if (is_dxs)
-        prefix_lowest_index - @as(u32, @truncate(@intFromPtr(dict_end) - @intFromPtr(dict_base)))
+        prefix_lowest_index - @as(u32, @truncate(@intFromPtr(dict_end) -% @intFromPtr(dict_base)))
     else
         0;
     const dict_length: usize = if (is_dxs) @intFromPtr(dict_end) - @intFromPtr(dict_lowest) else 0;

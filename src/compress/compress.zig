@@ -2167,7 +2167,7 @@ fn resetCCtxByAttachingCDict(
     }
 
     {
-        const cdict_end: u32 = @intCast(@intFromPtr(cdict.match_state.window.next_src) -
+        const cdict_end: u32 = @intCast(@intFromPtr(cdict.match_state.window.next_src) -%
             @intFromPtr(cdict.match_state.window.base));
         const cdict_len = cdict_end - cdict.match_state.window.dict_limit;
         // An empty dictionary is not attached.
@@ -3103,7 +3103,7 @@ fn buildSeqStore(zc: *CCtx, src: []const u8) Error!ci.BuildSeqStore {
 
     // Updates are limited after a very long match.
     {
-        const curr: u32 = @intCast(@intFromPtr(src.ptr) - @intFromPtr(ms.window.base));
+        const curr: u32 = @intCast(@intFromPtr(src.ptr) -% @intFromPtr(ms.window.base));
         if (curr > ms.next_to_update + 384) {
             ms.next_to_update = curr - @min(192, curr - ms.next_to_update - 384);
         }
@@ -4659,7 +4659,7 @@ fn loadDictionaryContent(
         l.loaded_dict_end = if (cctx_params.force_window)
             0
         else
-            @intCast(@intFromPtr(iend) - @intFromPtr(l.window.base));
+            @intCast(@intFromPtr(iend) -% @intFromPtr(l.window.base));
         ldm.fillHashTable(l, src, &cctx_params.ldm_params);
     }
 
@@ -4673,11 +4673,11 @@ fn loadDictionaryContent(
         if (src.len > max_dict_size) src = src[src.len - max_dict_size ..];
     }
 
-    ms.next_to_update = @intCast(@intFromPtr(src.ptr) - @intFromPtr(ms.window.base));
+    ms.next_to_update = @intCast(@intFromPtr(src.ptr) -% @intFromPtr(ms.window.base));
     ms.loaded_dict_end = if (cctx_params.force_window)
         0
     else
-        @intCast(@intFromPtr(iend) - @intFromPtr(ms.window.base));
+        @intCast(@intFromPtr(iend) -% @intFromPtr(ms.window.base));
     ms.force_non_contiguous = cctx_params.deterministic_ref_prefix;
 
     if (src.len <= ci.hash_read_size) return;
@@ -4710,7 +4710,7 @@ fn loadDictionaryContent(
         _ => unreachable,
     }
 
-    ms.next_to_update = @intCast(@intFromPtr(iend) - @intFromPtr(ms.window.base));
+    ms.next_to_update = @intCast(@intFromPtr(iend) -% @intFromPtr(ms.window.base));
 }
 
 /// `ZSTD_dictNCountRepeat`: a dictionary's table is valid to repeat only

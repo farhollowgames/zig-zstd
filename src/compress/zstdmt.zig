@@ -504,7 +504,7 @@ const SerialState = struct {
                     serial.ldm_state.loaded_dict_end = if (cctx_params.force_window)
                         0
                     else
-                        @intCast(dict_end - @intFromPtr(serial.ldm_state.window.base));
+                        @intCast(dict_end -% @intFromPtr(serial.ldm_state.window.base));
                 }
             }
 

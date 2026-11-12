@@ -519,8 +519,8 @@ inline fn updateTreeInternal(
         assert(idx < idx +% forward);
         idx += forward;
     }
-    assert(@intFromPtr(ip) - @intFromPtr(base) <= std.math.maxInt(u32));
-    assert(@intFromPtr(iend) - @intFromPtr(base) <= std.math.maxInt(u32));
+    assert(@intFromPtr(ip) -% @intFromPtr(base) <= std.math.maxInt(u32));
+    assert(@intFromPtr(iend) -% @intFromPtr(base) <= std.math.maxInt(u32));
     ms.next_to_update = target;
 }
 

@@ -36,7 +36,7 @@ fn fillHashTableForCDict(ms: *MatchState, end: [*]const u8, dtlm: DictTableLoadM
 
     // Every third position goes in; the others only where their entry is empty.
     while (@intFromPtr(ip) + fast_hash_fill_step < iend +% 2) : (ip += fast_hash_fill_step) {
-        const curr: u32 = @intCast(@intFromPtr(ip) - @intFromPtr(base));
+        const curr: u32 = @intCast(@intFromPtr(ip) -% @intFromPtr(base));
         ci.writeTaggedIndex(hash_table, ci.hashPtr(ip, h_bits, mls), curr);
 
         if (dtlm == .fast) continue;
@@ -65,7 +65,7 @@ fn fillHashTableForCCtx(ms: *MatchState, end: [*]const u8, dtlm: DictTableLoadMe
 
     // Every third position goes in; the others only where their entry is empty.
     while (@intFromPtr(ip) + fast_hash_fill_step < iend +% 2) : (ip += fast_hash_fill_step) {
-        const curr: u32 = @intCast(@intFromPtr(ip) - @intFromPtr(base));
+        const curr: u32 = @intCast(@intFromPtr(ip) -% @intFromPtr(base));
         hash_table[ci.hashPtr(ip, h_bits, mls)] = curr;
         if (dtlm == .fast) continue;
         for (1..fast_hash_fill_step) |p| {
@@ -157,7 +157,7 @@ inline fn compressBlockFastNoDictGeneric(
         @intFromBool(cparams.target_length == 0) + 1;
     const base = ms.window.base;
     const istart = src.ptr;
-    const end_index: u32 = @intCast(@intFromPtr(istart) - @intFromPtr(base) + src.len);
+    const end_index: u32 = @intCast(@intFromPtr(istart) -% @intFromPtr(base) +% src.len);
     const prefix_start_index = ci.getLowestPrefixIndex(ms, end_index, cparams.window_log);
     const prefix_start = base + prefix_start_index;
     const iend = istart + src.len;
@@ -192,7 +192,7 @@ inline fn compressBlockFastNoDictGeneric(
 
     if (ip0 == prefix_start) ip0 += 1;
     {
-        const curr: u32 = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+        const curr: u32 = @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
         const window_low = ci.getLowestPrefixIndex(ms, curr, cparams.window_log);
         const max_rep = curr - window_low;
         if (rep_offset2 > max_rep) {
@@ -228,7 +228,7 @@ inline fn compressBlockFastNoDictGeneric(
                 // The repeat-offset candidate for ip2.
                 const rval = std.mem.readInt(u32, (ip2 - rep_offset1)[0..4], native_endian);
 
-                current0 = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+                current0 = @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
                 hash_table[hash0] = current0;
 
                 // Both tests are made, with no branch between them.
@@ -243,7 +243,7 @@ inline fn compressBlockFastNoDictGeneric(
 
                     // The next entry is already hashed, and ip1 is before
                     // the match at ip2, so writing it is safe.
-                    hash_table[hash1] = @intCast(@intFromPtr(ip1) - @intFromPtr(base));
+                    hash_table[hash1] = @intCast(@intFromPtr(ip1) -% @intFromPtr(base));
                     continue :state .match;
                 }
 
@@ -254,7 +254,7 @@ inline fn compressBlockFastNoDictGeneric(
                 if (found0) {
                     // Already hashed; ip1 == ip0 + 1, so the search resumes
                     // after it.
-                    hash_table[hash1] = @intCast(@intFromPtr(ip1) - @intFromPtr(base));
+                    hash_table[hash1] = @intCast(@intFromPtr(ip1) -% @intFromPtr(base));
                     continue :state .offset;
                 }
 
@@ -267,7 +267,7 @@ inline fn compressBlockFastNoDictGeneric(
                 ip1 = ip2;
                 ip2 = ip3;
 
-                current0 = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+                current0 = @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
                 hash_table[hash0] = current0;
 
                 const found1 = if (use_cmov)
@@ -279,7 +279,7 @@ inline fn compressBlockFastNoDictGeneric(
                     // 4 bytes, so the search resumes at ip0 + 4 or later; with
                     // a larger step, ip1 could be past that.
                     if (step <= 4) {
-                        hash_table[hash1] = @intCast(@intFromPtr(ip1) - @intFromPtr(base));
+                        hash_table[hash1] = @intCast(@intFromPtr(ip1) -% @intFromPtr(base));
                     }
                     continue :state .offset;
                 }
@@ -354,7 +354,7 @@ inline fn compressBlockFastNoDictGeneric(
                 assert(@intFromPtr(base + current0 + 2) > @intFromPtr(istart));
                 hash_table[ci.hashPtr(base + current0 + 2, hlog, mls)] = current0 + 2;
                 hash_table[ci.hashPtr(ip0 - 2, hlog, mls)] =
-                    @intCast(@intFromPtr(ip0 - 2) - @intFromPtr(base));
+                    @intCast(@intFromPtr(ip0 - 2) -% @intFromPtr(base));
 
                 // A second offset of 0 is invalid.
                 if (rep_offset2 > 0) {
@@ -369,7 +369,7 @@ inline fn compressBlockFastNoDictGeneric(
                         rep_offset2 = rep_offset1;
                         rep_offset1 = tmp_off;
                         hash_table[ci.hashPtr(ip0, hlog, mls)] =
-                            @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+                            @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
                         ip0 += r_length;
                         ci.storeSeq(seq_store, 0, anchor, iend, ci.repcode1_to_offbase, r_length);
                         anchor = ip0;
@@ -451,18 +451,19 @@ inline fn compressBlockFastDictMatchStateGeneric(
     const dict_start = dict_base + dict_start_index;
     const dict_end = dms.window.next_src;
     const dict_index_delta = prefix_start_index -
-        @as(u32, @intCast(@intFromPtr(dict_end) - @intFromPtr(dict_base)));
+        @as(u32, @intCast(@intFromPtr(dict_end) -% @intFromPtr(dict_base)));
     const dict_and_prefix_length: u32 = @intCast(@intFromPtr(istart) - @intFromPtr(prefix_start) +
         @intFromPtr(dict_end) - @intFromPtr(dict_start));
     const dict_h_bits = dict_cparams.hash_log + short_cache_tag_bits;
 
     // An attached dictionary is within the window.
     const max_distance = @as(u32, 1) << @intCast(cparams.window_log);
-    const end_index: u32 = @intCast(@intFromPtr(istart) - @intFromPtr(base) + src.len);
+    const end_index: u32 = @intCast(@intFromPtr(istart) -% @intFromPtr(base) +% src.len);
     assert(end_index - prefix_start_index <= max_distance);
 
     // Dictionary indexes translate to this window's without underflow.
-    assert(prefix_start_index >= @as(u32, @intCast(@intFromPtr(dict_end) - @intFromPtr(dict_base))));
+    assert(prefix_start_index >=
+        @as(u32, @intCast(@intFromPtr(dict_end) -% @intFromPtr(dict_base))));
 
     if (ms.prefetch_cdict_tables) {
         const hash_table_bytes = (@as(usize, 1) << @intCast(dict_cparams.hash_log)) * @sizeOf(u32);
@@ -485,7 +486,7 @@ inline fn compressBlockFastDictMatchStateGeneric(
         var dict_tags_match = ci.comparePackedTags(dict_match_index_and_tag, dict_hash_and_tag0);
 
         var match_index = hash_table[hash0];
-        var curr: u32 = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+        var curr: u32 = @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
         var step: usize = step_size;
         const k_step_incr: usize = 1 << ci.search_strength;
         var next_step = @intFromPtr(ip0) + k_step_incr;
@@ -575,7 +576,7 @@ inline fn compressBlockFastDictMatchStateGeneric(
             ip1 = ip1 + step;
             if (@intFromPtr(ip1) > ilimit) break :outer;
 
-            curr = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+            curr = @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
             hash0 = hash1;
         }
 
@@ -589,11 +590,11 @@ inline fn compressBlockFastDictMatchStateGeneric(
             assert(@intFromPtr(base + curr + 2) > @intFromPtr(istart));
             hash_table[ci.hashPtr(base + curr + 2, hlog, mls)] = curr + 2;
             hash_table[ci.hashPtr(ip0 - 2, hlog, mls)] =
-                @intCast(@intFromPtr(ip0 - 2) - @intFromPtr(base));
+                @intCast(@intFromPtr(ip0 - 2) -% @intFromPtr(base));
 
             // Immediate repeat offsets.
             while (@intFromPtr(ip0) <= ilimit) {
-                const current2: u32 = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+                const current2: u32 = @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
                 const rep_index2 = current2 -% offset_2;
                 const rep_match2 = if (rep_index2 < prefix_start_index)
                     dict_base - dict_index_delta + rep_index2
@@ -668,7 +669,7 @@ fn compressBlockFastExtDictGeneric(
     const dict_base = ms.window.dict_base;
     const istart = src.ptr;
     var anchor = istart;
-    const end_index: u32 = @intCast(@intFromPtr(istart) - @intFromPtr(base) + src.len);
+    const end_index: u32 = @intCast(@intFromPtr(istart) -% @intFromPtr(base) +% src.len);
     const low_limit = ci.getLowestMatchIndex(ms, end_index, cparams.window_log);
     const dict_start_index = low_limit;
     const dict_start = dict_base + dict_start_index;
@@ -707,7 +708,7 @@ fn compressBlockFastExtDictGeneric(
     if (prefix_start_index == dict_start_index) return compressBlockFast(ms, seq_store, rep, src);
 
     {
-        const curr: u32 = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+        const curr: u32 = @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
         const max_rep = curr - dict_start_index;
         if (offset_2 >= max_rep) {
             offset_saved2 = offset_2;
@@ -742,7 +743,7 @@ fn compressBlockFastExtDictGeneric(
             while (true) {
                 {
                     // The repeat-offset candidate for ip2.
-                    const current2: u32 = @intCast(@intFromPtr(ip2) - @intFromPtr(base));
+                    const current2: u32 = @intCast(@intFromPtr(ip2) -% @intFromPtr(base));
                     const rep_index = current2 -% offset_1;
                     const rep_base = if (rep_index < prefix_start_index) dict_base else base;
                     const ip2_value = std.mem.readInt(u32, ip2[0..4], native_endian);
@@ -752,7 +753,7 @@ fn compressBlockFastExtDictGeneric(
                     else
                         ip2_value ^ 1; // Never matches.
 
-                    current0 = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+                    current0 = @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
                     hash_table[hash0] = current0;
 
                     if (ip2_value == rval) {
@@ -788,7 +789,7 @@ fn compressBlockFastExtDictGeneric(
                 ip1 = ip2;
                 ip2 = ip3;
 
-                current0 = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+                current0 = @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
                 hash_table[hash0] = current0;
 
                 {
@@ -868,7 +869,7 @@ fn compressBlockFastExtDictGeneric(
 
             // The next hash table entry.
             if (@intFromPtr(ip1) < @intFromPtr(ip0)) {
-                hash_table[hash1] = @intCast(@intFromPtr(ip1) - @intFromPtr(base));
+                hash_table[hash1] = @intCast(@intFromPtr(ip1) -% @intFromPtr(base));
             }
 
             // Fill the table, and check for an immediate repeat offset.
@@ -877,10 +878,10 @@ fn compressBlockFastExtDictGeneric(
                 assert(@intFromPtr(base + current0 + 2) > @intFromPtr(istart));
                 hash_table[ci.hashPtr(base + current0 + 2, hlog, mls)] = current0 + 2;
                 hash_table[ci.hashPtr(ip0 - 2, hlog, mls)] =
-                    @intCast(@intFromPtr(ip0 - 2) - @intFromPtr(base));
+                    @intCast(@intFromPtr(ip0 - 2) -% @intFromPtr(base));
 
                 while (@intFromPtr(ip0) <= ilimit) {
-                    const current2: u32 = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
+                    const current2: u32 = @intCast(@intFromPtr(ip0) -% @intFromPtr(base));
                     const rep_index2 = current2 -% offset_2;
                     const rep_match2 = if (rep_index2 < prefix_start_index)
                         dict_base + rep_index2

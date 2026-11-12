@@ -382,7 +382,7 @@ pub const Window = struct {
 
     /// `ZSTD_window_clear`: forgets the history, keeping the indexes.
     pub fn clear(window: *Window) void {
-        const end: u32 = @intCast(@intFromPtr(window.next_src) - @intFromPtr(window.base));
+        const end: u32 = @intCast(@intFromPtr(window.next_src) -% @intFromPtr(window.base));
         window.low_limit = end;
         window.dict_limit = end;
     }
@@ -1726,7 +1726,7 @@ pub const BlockTest = struct {
                 dms.chain_table = self.dict_chain_table.ptr;
                 dms.cparams = attached.cparams;
                 loadDictContent(dms, attached.content, .full, .for_cdict, fill.?);
-                const cdict_end: u32 = @intCast(@intFromPtr(dms.window.next_src) -
+                const cdict_end: u32 = @intCast(@intFromPtr(dms.window.next_src) -%
                     @intFromPtr(dms.window.base));
                 if (cdict_end - dms.window.dict_limit != 0) {
                     ms.dict_match_state = dms;
@@ -1749,7 +1749,7 @@ pub const BlockTest = struct {
         ms.window.enforceMaxDist(src.ptr, max_dist, &ms.loaded_dict_end, &ms.dict_match_state);
         if (ms.next_to_update < ms.window.low_limit) ms.next_to_update = ms.window.low_limit;
 
-        const curr: u32 = @intCast(@intFromPtr(src.ptr) - @intFromPtr(ms.window.base));
+        const curr: u32 = @intCast(@intFromPtr(src.ptr) -% @intFromPtr(ms.window.base));
         if (curr > ms.next_to_update + 384) {
             ms.next_to_update = curr - @min(192, curr - ms.next_to_update - 384);
         }
@@ -1772,11 +1772,11 @@ pub const BlockTest = struct {
     ) void {
         const iend = dict.ptr + dict.len;
         _ = ms.window.update(dict, false);
-        ms.next_to_update = @intCast(@intFromPtr(dict.ptr) - @intFromPtr(ms.window.base));
-        ms.loaded_dict_end = @intCast(@intFromPtr(iend) - @intFromPtr(ms.window.base));
+        ms.next_to_update = @intCast(@intFromPtr(dict.ptr) -% @intFromPtr(ms.window.base));
+        ms.loaded_dict_end = @intCast(@intFromPtr(iend) -% @intFromPtr(ms.window.base));
         if (dict.len <= hash_read_size) return;
         fill(ms, iend, dtlm, tfp);
-        ms.next_to_update = @intCast(@intFromPtr(iend) - @intFromPtr(ms.window.base));
+        ms.next_to_update = @intCast(@intFromPtr(iend) -% @intFromPtr(ms.window.base));
     }
 
     pub fn destroy(self: *BlockTest) void {
@@ -2019,10 +2019,10 @@ test "window: enforceMaxDist and the overflow correction keep the low bits" {
     w.low_limit += current_max;
     w.dict_limit += current_max;
     const src = buffer.ptr + buffer.len - 16;
-    const before: u32 = @intCast(@intFromPtr(src) - @intFromPtr(w.base));
+    const before: u32 = @intCast(@intFromPtr(src) -% @intFromPtr(w.base));
     try testing.expect(w.needOverflowCorrection(17, max_dist, 0, src, buffer.ptr + buffer.len));
     const correction = w.correctOverflow(17, max_dist, src);
-    const after: u32 = @intCast(@intFromPtr(src) - @intFromPtr(w.base));
+    const after: u32 = @intCast(@intFromPtr(src) -% @intFromPtr(w.base));
     try testing.expectEqual(before - correction, after);
     try testing.expectEqual(before & ((1 << 17) - 1), after & ((1 << 17) - 1));
     try testing.expect(after >= max_dist + window_start_index);

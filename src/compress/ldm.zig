@@ -281,7 +281,7 @@ pub fn fillHashTable(ldm_state: *LdmState, src: []const u8, ldm_params: *const L
                 const xxhash = std.hash.XxHash64.hash(0, split[0..min_match_length]);
                 const hash = @as(u32, @truncate(xxhash)) & hash_mask;
                 const entry: LdmEntry = .{
-                    .offset = @intCast(@intFromPtr(split) - @intFromPtr(base)),
+                    .offset = @intCast(@intFromPtr(split) -% @intFromPtr(base)),
                     .checksum = @truncate(xxhash >> 32),
                 };
                 insertEntry(ldm_state, hash, entry, bucket_size_log);
@@ -295,7 +295,7 @@ pub fn fillHashTable(ldm_state: *LdmState, src: []const u8, ldm_params: *const L
 /// `ZSTD_ldm_limitTableUpdate`: after a long match, moves `next_to_update`
 /// up near `anchor`, so the tables are only filled with the end of the match.
 fn limitTableUpdate(ms: *MatchState, anchor: [*]const u8) void {
-    const curr: u32 = @intCast(@intFromPtr(anchor) - @intFromPtr(ms.window.base));
+    const curr: u32 = @intCast(@intFromPtr(anchor) -% @intFromPtr(ms.window.base));
     if (curr > ms.next_to_update + 1024) {
         ms.next_to_update = curr - @min(512, curr - ms.next_to_update - 1024);
     }
@@ -369,7 +369,7 @@ fn generateSequencesInternal(
             const bucket = candidate.bucket;
             var best_entry: ?*const LdmEntry = null;
             const new_entry: LdmEntry = .{
-                .offset = @intCast(@intFromPtr(split) - @intFromPtr(base)),
+                .offset = @intCast(@intFromPtr(split) -% @intFromPtr(base)),
                 .checksum = checksum,
             };
 

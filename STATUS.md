@@ -131,8 +131,13 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
       (`compressCCtx: edge cases`, a constant in `.rodata`), `base` wraps below 0 and
       `@intCast(@intFromPtr(p) - @intFromPtr(base))` panics (`buildSeqStore`,
       `compress.zig:3101`), where the original's pointer difference cast to U32 wraps.
-      Fix: `@truncate(... -% ...)`, as the window functions already do; most sites are
-      in the match finders, so after the perf pass merges.
+      **Fixed**: every pointer difference from a window's `base` or `dict_base` (63 sites,
+      and the asserts in `opt.zig`) subtracts with `-%`, as the original's pointer
+      difference cast to U32 wraps, and casts with `@intCast`: an index is below 2^32 by
+      the window's own limits, and the cast keeps that fact for the optimizer. The x86-64
+      bench binary's disassembly is the same, instruction for instruction, before and
+      after; a `@truncate` of the same difference spilled `curr` in dfast's loop and took
+      1.7% longer at levels 2 to 4. `compressCCtx: edge cases` passes on 32-bit.
     - **Tables past the address space**: a hash or chain log of 30 (4 GiB of u32) is in
       bounds on 32-bit, and the original's size_t sums wrap to a workspace too small for
       its tables; the port's estimate panics with an integer overflow
