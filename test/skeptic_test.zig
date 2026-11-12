@@ -374,32 +374,3 @@ test "skeptic: a thread pool replaced by refThreadPool still runs the context's 
     _ = try cctx.compress2(dst, src);
     try std.testing.expect(cctx.mtctx.?.factory.? == second);
 }
-
-// `Window.checkDictValidity` and `Window.enforceMaxDist` add the window size
-// to the dictionary's end index in u32 with `+`, where the original's U32 sum
-// wraps. A prefix of 2 GiB puts the end index at 2^31 + 2, and a window log
-// of 31 makes the window 2^31: the port panics with an integer overflow in a
-// safe build (and the sum is undefined in ReleaseFast), while the original's
-// sum wraps to 2, so it clears its dictionary end and carries on. The
-// original's CLI references the old file of `--patch-from` as a prefix, with
-// a window log to cover it, so an old file of 2 GiB gives these sizes.
-test "skeptic: a 2 GiB prefix with window log 31 overflows the dictionary's validity check" {
-    const prefix = try gpa.alloc(u8, 1 << 31);
-    defer gpa.free(prefix);
-    @memset(prefix, 'z');
-    const src = try common.generated(200_000, 0.5, 0.3, 31);
-    defer gpa.free(src);
-    const pair = try Pair.init();
-    defer pair.deinit();
-    try pair.set(.window_log, 31);
-    try pair.set(.strategy, 1);
-    try pair.set(.hash_log, 16);
-    try pair.set(.chain_log, 16);
-    // A stable input, so neither side buffers a 2 GiB window.
-    try pair.set(.stable_in_buffer, 1);
-    try frame.expectSameResult(
-        c.ZSTD_CCtx_refPrefix(pair.upstream, prefix.ptr, prefix.len),
-        pair.port.refPrefix(prefix),
-    );
-    try expectSameFlushedStream(pair, src);
-}

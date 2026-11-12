@@ -242,6 +242,69 @@ test "refPrefix: raw prefixes, one frame each" {
     }
 }
 
+/// Streams `src` on both sides with `.flush` and then `.end`, so the size
+/// stays unknown, and compares every result and the frames. Returns the
+/// port's frame; the caller frees it.
+fn flushedStreamFrame(pair: Pair, src: []const u8) ![]u8 {
+    const capacity = c.ZSTD_compressBound(src.len) + 64;
+    const expected = try gpa.alloc(u8, capacity);
+    defer gpa.free(expected);
+    const actual = try gpa.alloc(u8, capacity);
+    errdefer gpa.free(actual);
+    var upstream_out: c.ZSTD_outBuffer = .{ .dst = expected.ptr, .size = capacity, .pos = 0 };
+    var upstream_in: c.ZSTD_inBuffer = .{ .src = src.ptr, .size = src.len, .pos = 0 };
+    var port_out: zstd.OutBuffer = .{ .dst = actual };
+    var port_in: zstd.InBuffer = .{ .src = src };
+    for ([_]zstd.EndDirective{ .flush, .end }) |op| {
+        const code = c.ZSTD_compressStream2(
+            pair.upstream,
+            &upstream_out,
+            &upstream_in,
+            @backingInt(op),
+        );
+        try expectSameResult(code, pair.port.compressStream2(&port_out, &port_in, op));
+        try testing.expectEqual(upstream_in.pos, port_in.pos);
+        try testing.expectEqual(upstream_out.pos, port_out.pos);
+    }
+    try common.expectSameFrame(expected[0..upstream_out.pos], actual[0..port_out.pos]);
+    return gpa.realloc(actual, port_out.pos);
+}
+
+// A prefix of 2 GiB with a window log of 31 puts the dictionary's end at
+// index 2^31 + 2, so the dictionary's end plus the window size wraps in u32,
+// as it does in the original, and the dictionary goes at the first block.
+// The prefix is a read-only mapping of zero pages, so it takes almost no
+// memory.
+test "refPrefix: a 2 GiB prefix with window log 31" {
+    if (@sizeOf(usize) < 8) return error.SkipZigTest;
+    const prefix = try std.posix.mmap(
+        null,
+        1 << 31,
+        .{ .READ = true },
+        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+        -1,
+        0,
+    );
+    defer std.posix.munmap(prefix);
+    const src = try common.generated(200_000, 0.5, 0.3, 31);
+    defer gpa.free(src);
+    const pair = try Pair.init();
+    defer pair.deinit();
+    try pair.set(.window_log, 31);
+    try pair.set(.strategy, 1);
+    try pair.set(.hash_log, 16);
+    try pair.set(.chain_log, 16);
+    // A stable input, so neither side buffers a 2 GiB window.
+    try pair.set(.stable_in_buffer, 1);
+    try expectSameResult(
+        c.ZSTD_CCtx_refPrefix(pair.upstream, prefix.ptr, prefix.len),
+        pair.port.refPrefix(prefix),
+    );
+    const out = try flushedStreamFrame(pair, src);
+    defer gpa.free(out);
+    try expectDecodes(out, src, prefix);
+}
+
 /// A digested dictionary of each side.
 const CDictPair = struct {
     port: *const zstd.CDict,

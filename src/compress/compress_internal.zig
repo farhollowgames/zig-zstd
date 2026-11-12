@@ -516,7 +516,8 @@ pub const Window = struct {
         // subtraction from underflowing. A copied dictionary's indexes start
         // at 0, so loaded_end is its size; an attached one's are in this
         // window's referential. Either way they compare with block_end_idx.
-        if (block_end_idx > max_dist + loaded_end) {
+        // The sum wraps with a window log of 31, as the original's does.
+        if (block_end_idx > max_dist +% loaded_end) {
             const new_low_limit = block_end_idx - max_dist;
             if (window.low_limit < new_low_limit) window.low_limit = new_low_limit;
             if (window.dict_limit < window.low_limit) window.dict_limit = window.low_limit;
@@ -541,8 +542,9 @@ pub const Window = struct {
         // The dictionary goes for the whole block if the window ends anywhere
         // in it, or when `update` found the segments not contiguous
         // (loaded_end != dict_limit). loaded_end may be 0 with forceWindow,
-        // which never uses a dict match state.
-        if (block_end_idx > loaded_end + max_dist or loaded_end != window.dict_limit) {
+        // which never uses a dict match state. The sum wraps with a window
+        // log of 31, as the original's does, and the dictionary goes.
+        if (block_end_idx > loaded_end +% max_dist or loaded_end != window.dict_limit) {
             loaded_dict_end.* = 0;
             dict_match_state.* = null;
         }

@@ -428,8 +428,9 @@ inline fn compressBlockDoubleFastDictMatchStateGeneric(
     const dict_and_prefix_length: u32 = @intCast(@intFromPtr(ip) - @intFromPtr(prefix_lowest) +
         @intFromPtr(dict_end) - @intFromPtr(dict_start));
 
-    // An attached dictionary is within the window.
-    assert(ms.window.dict_limit + (@as(u32, 1) << @intCast(cparams.window_log)) >= end_index);
+    // An attached dictionary is within the window. The sum wraps as
+    // `Window.checkDictValidity`'s does, which drops the dictionary first.
+    assert(ms.window.dict_limit +% (@as(u32, 1) << @intCast(cparams.window_log)) >= end_index);
 
     if (ms.prefetch_cdict_tables) {
         const hash_table_bytes = (@as(usize, 1) << @intCast(dict_cparams.hash_log)) * @sizeOf(u32);
