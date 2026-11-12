@@ -79,7 +79,7 @@ const max_input_size: usize = if (@sizeOf(usize) == 8) 0xFF00FF00FF00FF00 else 0
 /// differ, but the workspace reserves the original's sizes for them, so that
 /// `estimate*` and `sizeof*` give the original's numbers and a static
 /// workspace of the original's size works.
-const c_layout = struct {
+pub const c_layout = struct {
     const Ptr = ?*anyopaque;
     const Enum = c_uint;
 
@@ -92,7 +92,7 @@ const c_layout = struct {
 
     const CCustomMem = extern struct { alloc: Ptr, free: Ptr, opaque_ptr: Ptr };
     const CLdmParams = extern struct { fields: [6]u32 };
-    const CParams = extern struct {
+    pub const CParams = extern struct {
         format: Enum,
         cparams: [7]c_uint,
         fparams: [3]c_int,
@@ -131,7 +131,7 @@ const c_layout = struct {
         phase: Enum,
         is_static: Enum,
     };
-    const CXxh64State = extern struct {
+    pub const CXxh64State = extern struct {
         total_len: u64,
         v: [4]u64,
         mem64: [4]u64,
@@ -152,7 +152,7 @@ const c_layout = struct {
         long_length_type: Enum,
         long_length_pos: u32,
     };
-    const CWindow = extern struct {
+    pub const CWindow = extern struct {
         pointers: [3]Ptr,
         limits: [3]u32,
     };
@@ -162,7 +162,7 @@ const c_layout = struct {
         checksum: u32,
         bucket: Ptr,
     };
-    const CLdmState = extern struct {
+    pub const CLdmState = extern struct {
         window: CWindow,
         hash_table: Ptr,
         loaded_dict_end: u32,
