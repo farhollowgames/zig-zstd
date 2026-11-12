@@ -136,6 +136,10 @@ fn buildOptions(b: *std.Build, intrinsics: bool, multithread: bool) *std.Build.S
     const options = b.addOptions();
     options.addOption(bool, "intrinsics", intrinsics);
     options.addOption(bool, "multithread", multithread);
+    // ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY, off as in the original's
+    // library build; a test build that turns it on must build the original
+    // with it too.
+    options.addOption(bool, "overflow_correct_frequently", false);
     return options;
 }
 
