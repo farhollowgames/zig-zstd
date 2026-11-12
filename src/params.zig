@@ -75,7 +75,9 @@ pub const src_size_hint_max = std.math.maxInt(c_int);
 
 pub const block_splitter_level_max = 6;
 
-/// The match finders, from fastest to strongest.
+/// The match finders, from fastest to strongest. As in the original, other
+/// values can be held: 0 in a parameter set leaves the strategy to the
+/// level, and anything else outside 1 to 9 is refused where it is checked.
 pub const Strategy = enum(u32) {
     fast = 1,
     dfast = 2,
@@ -86,6 +88,7 @@ pub const Strategy = enum(u32) {
     btopt = 7,
     btultra = 8,
     btultra2 = 9,
+    _,
 };
 
 /// The original's `ZSTD_compressionParameters`.
