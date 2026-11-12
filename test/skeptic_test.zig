@@ -379,7 +379,10 @@ test "skeptic: a thread pool replaced by refThreadPool still runs the context's 
 // to the dictionary's end index in u32 with `+`, where the original's U32 sum
 // wraps. A prefix of 2 GiB puts the end index at 2^31 + 2, and a window log
 // of 31 makes the window 2^31: the port panics with an integer overflow in a
-// safe build, while the original's sum wraps to 2 and it drops the prefix.
+// safe build (and the sum is undefined in ReleaseFast), while the original's
+// sum wraps to 2, so it clears its dictionary end and carries on. The
+// original's CLI references the old file of `--patch-from` as a prefix, with
+// a window log to cover it, so an old file of 2 GiB gives these sizes.
 test "skeptic: a 2 GiB prefix with window log 31 overflows the dictionary's validity check" {
     const prefix = try gpa.alloc(u8, 1 << 31);
     defer gpa.free(prefix);
