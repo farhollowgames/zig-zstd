@@ -66,10 +66,10 @@ Pushing: `main` and the review branch go to
 | negative levels (`ZSTD_minCLevel` = -131072) | `fast` with target length | not started |
 | `ZSTD_fast` (`zstd_fast.c`), with dictMatchState and extDict | `fast.zig` | not started |
 | `ZSTD_dfast` (`zstd_double_fast.c`) | `double_fast.zig` | not started |
-| `ZSTD_greedy`, `ZSTD_lazy`, `ZSTD_lazy2` (hash chain) | `lazy.zig` | not started |
-| the row-based match finder (`useRowMatchFinder`), SSE2 and NEON tag compare | `lazy.zig`, `@Vector` | not started |
-| `ZSTD_btlazy2` (binary tree) | `lazy.zig` | not started |
-| dedicated dictionary search (`enableDedicatedDictSearch`) | `lazy.zig` | not started |
+| `ZSTD_greedy`, `ZSTD_lazy`, `ZSTD_lazy2` (hash chain) | `lazy.zig` | oracle-tested per block, with dictMatchState and extDict (frames wait for `compress.zig`) |
+| the row-based match finder (`useRowMatchFinder`), SSE2 and NEON tag compare | `lazy.zig`, `@Vector` | oracle-tested per block, SIMD and scalar builds (NEON only by a unit test on x86) |
+| `ZSTD_btlazy2` (binary tree) | `lazy.zig` | oracle-tested per block, with extDict; dictionaries wait for `opt.zig`'s `updateTree` |
+| dedicated dictionary search (`enableDedicatedDictSearch`) | `lazy.zig` | oracle-tested per block (frames and CDicts wait for `compress.zig`) |
 | `ZSTD_btopt`, `ZSTD_btultra`, `ZSTD_btultra2` | `opt.zig` | not started |
 | long-distance matching (`zstd_ldm.c`) | `ldm.zig` | not started |
 | `ZSTD_getCParams`, `ZSTD_getParams`, `ZSTD_checkCParams`, `ZSTD_adjustCParams` | same | not started |
