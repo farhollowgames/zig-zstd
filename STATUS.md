@@ -34,6 +34,9 @@ creates `farhollowgames/zig-zstd`).
   through the hasher too" (Decompress.zig:373). The smallest input that shows
   it is one byte compressed with `ZSTD_c_checksumFlag` = 1. The tests decode
   through std without checksum verification and through the original with it.
+- Loomwork's snapshots hold table rows as column chunks, not B+ tree pages,
+  so `test/data/snapshot.bin` (a real snapshot pack from the mmo example's
+  server) stands in for "B+ tree pages from a snapshot".
 - std's decoder takes no dictionaries, so frames made with a dictionary or a
   prefix round-trip through the original's decoder only.
 
