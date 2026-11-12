@@ -85,10 +85,10 @@ Pushing: `main` and the review branch go to
 | negative levels (`ZSTD_minCLevel` = -131072) | `fast` with target length | oracle-tested per block (the table rows, and `fast` with target lengths up to 100) |
 | `ZSTD_fast` (`zstd_fast.c`), with dictMatchState and extDict | `fast.zig` | oracle-tested per block (frames wait for `compress.zig`) |
 | `ZSTD_dfast` (`zstd_double_fast.c`) | `double_fast.zig` | oracle-tested per block (frames wait for `compress.zig`) |
-| `ZSTD_greedy`, `ZSTD_lazy`, `ZSTD_lazy2` (hash chain) | `lazy.zig` | not started |
-| the row-based match finder (`useRowMatchFinder`), SSE2 and NEON tag compare | `lazy.zig`, `@Vector` | not started |
-| `ZSTD_btlazy2` (binary tree) | `lazy.zig` | not started |
-| dedicated dictionary search (`enableDedicatedDictSearch`) | `lazy.zig` | not started |
+| `ZSTD_greedy`, `ZSTD_lazy`, `ZSTD_lazy2` (hash chain) | `lazy.zig` | oracle-tested per block, with dictMatchState and extDict (frames wait for `compress.zig`) |
+| the row-based match finder (`useRowMatchFinder`), SSE2 and NEON tag compare | `lazy.zig`, `@Vector` | oracle-tested per block, SIMD and scalar builds (NEON only by a unit test on x86) |
+| `ZSTD_btlazy2` (binary tree) | `lazy.zig` | oracle-tested per block, with extDict; dictionaries wait for `opt.zig`'s `updateTree` |
+| dedicated dictionary search (`enableDedicatedDictSearch`) | `lazy.zig` | oracle-tested per block (frames and CDicts wait for `compress.zig`) |
 | `ZSTD_btopt`, `ZSTD_btultra`, `ZSTD_btultra2` (`zstd_opt.c`), with dictMatchState and extDict, btultra2's two passes over the first block | `opt.zig` | oracle-tested per block (`test/opt_test.zig`); frame-level tests wait for the frame path |
 | the optimal parser's price model: dictionary entropy tables, fixed prices for tiny blocks, literal compression off, statistics across blocks | `opt.zig` | oracle-tested per block |
 | long distance match candidates in the optimal parser (`ZSTD_optLdm_*`) | `opt.zig` | oracle-tested per block, on hand-made candidates; with `ldm.zig`'s once it lands |

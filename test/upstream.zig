@@ -623,3 +623,48 @@ pub extern fn reference_optEntropy(
     ml_ctable: [*]u32,
     ll_ctable: [*]u32,
 ) c_int;
+
+
+/// The lazy match finders' block test in test/reference.c. `dict_kind`: 0
+/// none, 1 loaded into the context, 2 attached as a dict match state, 3
+/// compressed as an earlier block of the same context.
+pub const reference_LazySetup = extern struct {
+    cparams: ZSTD_compressionParameters,
+    use_row: c_int,
+    hash_salt: u64,
+    hash_table: [*]u32,
+    chain_table: [*]u32,
+    tag_table: [*]u8,
+    dict_kind: c_int,
+    dict: ?*const anyopaque,
+    dict_size: usize,
+    dict_cparams: ZSTD_compressionParameters,
+    dict_use_row: c_int,
+    dict_dedicated_search: c_int,
+    dict_hash_table: [*]u32,
+    dict_chain_table: [*]u32,
+    dict_tag_table: [*]u8,
+};
+
+pub const reference_LazyResult = extern struct {
+    seqs: [*]SeqDef,
+    seq_capacity: usize,
+    lits: [*]u8,
+    lit_capacity: usize,
+    rep: [3]u32,
+    nb_seq: usize,
+    nb_lit: usize,
+    long_length_type: u32,
+    long_length_pos: u32,
+    next_to_update: u32,
+    hash_salt_entropy: u32,
+    lazy_skipping: u32,
+    hash_cache: [8]u32,
+};
+
+pub extern fn reference_lazyBlockTest(
+    setup: *const reference_LazySetup,
+    src: ?*const anyopaque,
+    src_size: usize,
+    result: *reference_LazyResult,
+) usize;

@@ -41,4 +41,5 @@ test {
 
 test {
     _ = @import("opt_test.zig");
+    _ = @import("lazy_test.zig");
 }
