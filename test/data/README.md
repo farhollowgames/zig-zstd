@@ -44,7 +44,7 @@ Encoded vertex and index streams of the pirate demo mesh, back to back.
   mesh, so some structure repeats between streams.
 - Deterministic: rerunning the steps gives the same bytes.
 
-## btree.bin (418,747 bytes): database pages
+## snapshot.bin (418,747 bytes): database pages
 
 A snapshot pack of a running Loomwork world. Loomwork's snapshots do not
 write B+ tree nodes: the tables' rows are written column by column in
