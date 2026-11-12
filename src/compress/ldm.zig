@@ -335,7 +335,8 @@ fn generateSequencesInternal(
 
     if (src.len < min_match_length) return @intFromPtr(iend) - @intFromPtr(anchor);
 
-    // The hash starts over the first `min_match_length` bytes.
+    // The first `min_match_length` bytes are skipped; `gearReset` leaves
+    // the hash at its initial value, as the original's does.
     gearInit(&hash_state, ldm_params);
     gearReset(&hash_state, ip, min_match_length);
     ip += min_match_length;
