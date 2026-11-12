@@ -9,6 +9,7 @@ pub const errorCode = @import("error.zig").errorCode;
 
 const compress_internal = @import("compress/compress_internal.zig");
 const compress_impl = @import("compress/compress.zig");
+const pool = @import("common/pool.zig");
 
 /// A compression context: parameters, dictionaries, and the tables and
 /// buffers of the frame in progress, in one workspace. Made by `create`
@@ -19,8 +20,13 @@ const compress_impl = @import("compress/compress.zig");
 /// one-shot compression (`compress2` with those, `compressCCtx`,
 /// `compressUsingDict`, `compressAdvanced`, `compressUsingCDict*`), and the
 /// block-level API (`compressBegin*`, `compressContinue`, `compressEnd`,
-/// `compressBlock`, `copy`), plus `generateSequences` and
-/// `registerSequenceProducer`.
+/// `compressBlock`, `copy`), streaming (`compressStream2`,
+/// `compressStream2SimpleArgs`, `compressStream`, `flushStream`,
+/// `endStream`, `initCStream*`, `resetCStream`, `getFrameProgression`,
+/// `toFlushNow`), multithreading (the `nb_workers` parameter with `setIo`
+/// or `refThreadPool`), and sequences (`generateSequences`,
+/// `registerSequenceProducer`, `compressSequences`,
+/// `compressSequencesAndLiterals`).
 ///
 /// Buffers the context references, not copies, and what ends the reference:
 /// a dictionary loaded `by_ref` or a referenced `CDict` until it is replaced
@@ -28,8 +34,20 @@ const compress_impl = @import("compress/compress.zig");
 /// `refCDict`, `refPrefix*`) or the context destroyed; a prefix until the
 /// next frame is compressed; the `src` of `compressContinue` and
 /// `compressBlock` until the frame ends, as later blocks may match into it;
-/// a static context's workspace for the context's whole life.
+/// a static context's workspace for the context's whole life; with
+/// `stable_in_buffer`, a stream's input buffer until its frame ends; a
+/// thread pool and an `Io` until they are replaced or the context destroyed.
 pub const CCtx = compress_internal.CCtx;
+/// A streaming context is a compression context (`ZSTD_CStream`).
+pub const CStream = CCtx;
+/// The input and the output of a streaming call, and what the call does.
+pub const InBuffer = params.InBuffer;
+pub const OutBuffer = params.OutBuffer;
+pub const EndDirective = params.EndDirective;
+/// A pool of threads that contexts can share (`CCtx.refThreadPool`).
+pub const ThreadPool = pool.ThreadPool;
+pub const createThreadPool = pool.createThreadPool;
+pub const freeThreadPool = pool.freeThreadPool;
 /// Parameters held apart from a context, applied with
 /// `CCtx.setParametersUsingCCtxParams`.
 pub const CCtxParams = compress_internal.CCtxParams;
@@ -59,6 +77,8 @@ pub const estimateCStreamSizeUsingCCtxParams = compress_impl.estimateCStreamSize
 pub const estimateCDictSize = compress_impl.estimateCDictSize;
 pub const estimateCDictSizeAdvanced = compress_impl.estimateCDictSizeAdvanced;
 pub const writeSkippableFrame = compress_impl.writeSkippableFrame;
+pub const cStreamInSize = compress_impl.cStreamInSize;
+pub const cStreamOutSize = compress_impl.cStreamOutSize;
 pub const sequenceBound = compress_impl.sequenceBound;
 pub const mergeBlockDelimiters = compress_impl.mergeBlockDelimiters;
 

@@ -830,6 +830,10 @@ pub const CCtx = struct {
     custom_mem: ?std.mem.Allocator = null,
     /// A thread pool the caller owns, valid until it is unset.
     pool: ?*ThreadPool = null,
+    /// The `Io` whose locks multithreaded compression takes (`setIo`):
+    /// the multithreaded context is made on it, or on the thread pool's
+    /// when there is none, at the first frame with workers, and keeps it.
+    io: ?std.Io = null,
     /// The size of the caller's buffer for a static context, else 0.
     static_size: usize = 0,
     seq_collector: SeqCollector = .{},
@@ -863,8 +867,9 @@ pub const CCtx = struct {
     stream_stage: CStreamStage = .init,
     frame_ended: bool = false,
 
-    /// The stable input buffer the next call must pass; its slice is the
-    /// caller's buffer, only compared, never read after the call.
+    /// The stable input buffer the next call must pass: the caller's
+    /// buffer, which the stable mode promises valid until the frame ends.
+    /// `flushStream` and `endStream` read it again.
     expected_in_buffer: params.InBuffer = .{ .src = &.{} },
     /// Bytes of a stable input buffer reported consumed but not yet compressed.
     stable_in_not_consumed: usize = 0,
@@ -925,6 +930,21 @@ pub const CCtx = struct {
     pub const generateSequences = compress.generateSequences;
     pub const getFrameProgression = compress.getFrameProgression;
     pub const toFlushNow = compress.toFlushNow;
+    pub const setIo = compress.cctxSetIo;
+    pub const compressStream2 = compress.compressStream2;
+    pub const compressStream2SimpleArgs = compress.compressStream2SimpleArgs;
+    pub const compressStream = compress.compressStream;
+    pub const flushStream = compress.flushStream;
+    pub const endStream = compress.endStream;
+    pub const resetCStream = compress.resetCStream;
+    pub const initCStream = compress.initCStream;
+    pub const initCStreamSrcSize = compress.initCStreamSrcSize;
+    pub const initCStreamUsingDict = compress.initCStreamUsingDict;
+    pub const initCStreamAdvanced = compress.initCStreamAdvanced;
+    pub const initCStreamUsingCDict = compress.initCStreamUsingCDict;
+    pub const initCStreamUsingCDictAdvanced = compress.initCStreamUsingCDictAdvanced;
+    pub const compressSequences = compress.compressSequences;
+    pub const compressSequencesAndLiterals = compress.compressSequencesAndLiterals;
 };
 
 /// `ZSTD_dictTableLoadMethod_e`.

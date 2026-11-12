@@ -18,17 +18,18 @@ says how the code maps to it.
 
 ## Step 4 report (11 November 2026)
 
-**Done.** zstd 1.5.7 pinned in `reference/` (v1.5.7, f8745da6). Ported and merged on `main`:
-the entropy coders, the shared types and workspace, every strategy (fast, dfast, greedy,
-lazy, lazy2 with the row matcher, btlazy2, btopt, btultra, btultra2), long-distance
-matching, the superblock and the pre-splitter, zstd_compress.c's one-shot and buffer-less
-paths with dictionaries, CDicts and the external sequence producer, and zstdmt with its
-pool. The streaming half (CStream, `compressStream2` and its MT path, the sequence API) and
-the corpus tests are on `port/stream`, not merged yet.
+**Done.** zstd 1.5.7 pinned in `reference/` (v1.5.7, f8745da6). Every feature in this file
+that is not left out is ported and merged on `main`: the entropy coders, every strategy
+(fast, dfast, greedy, lazy, lazy2 with the row matcher, btlazy2, btopt, btultra,
+btultra2), long-distance matching, the superblock and the pre-splitter, one-shot,
+buffer-less and streaming compression (`compressStream2` with continue, flush and end,
+stable buffers), dictionaries, prefixes and CDicts, the sequence API and the external
+sequence producer, and multithreading on `std.Thread` with its pool.
 
-**Tests.** `zig build test -Dcorpus=false` on `main`: 260 of 260 pass (unit, `oracle`,
-`oracle-scalar`), each fuzz test at 1,000 cases. Frames are compared byte for byte with the
-original's, and every frame decodes through std's decoder and the original's.
+**Tests.** `zig build test` (corpus on): 298 of 298 pass in 28 minutes (58 unit, 120
+`oracle`, 120 `oracle-scalar`); `-Dcorpus=false` skips Silesia and Canterbury. Each fuzz
+test runs 1,000 cases. Frames are compared byte for byte with the original's, and every
+frame decodes through std's decoder and the original's.
 
 **Speed and ratio** (Silesia, one thread, `zig build bench`, before the performance pass;
 `doc/BENCHMARKS.md`). Ratios are equal at every level, since the frames are equal.
@@ -59,14 +60,9 @@ zig build <step> -j3`, never while the scratchpad's `bench.running` exists.
 `zig build check` compiles everything; `zig build test -Dcorpus=false` skips the
 corpus runs.
 
-Work happens on branches, one per area, each in a worktree under
-`~/Projects/zig-zstd.wt/`, merged into `main` once its tests pass. Merged:
-the entropy coders, the shared types and workspace, every match finder
-(fast, dfast, lazy and the row matcher, btlazy2, opt, LDM), zstd_compress.c
-up to the one-shot and buffer-less frame paths with CDicts, the superblock,
-the pre-splitter, and zstdmt with its pool. In progress on `port/stream`: the
-streaming half of zstd_compress.c (CStream, `compressStream2` and its MT
-path, the streaming `compress2`, the sequence API) and the corpus tests.
+All porting branches (`port/*`) are merged into `main` and pushed. Steps 1 to 4 of the
+methodology are done. Step 5 (the performance pass) is on `review/perf-and-skeptic`;
+steps 6 (skeptic) and 7 (fixes) follow on the same branch, then step 8 (release).
 
 Pushing: `main` and the review branch go to
 `git@github.com:farhollowgames/zig-zstd.git`, fast-forward only.
@@ -110,6 +106,30 @@ Pushing: `main` and the review branch go to
   `error.MemoryAllocation` (both refuse a copy at load time).
 - `CCtx.generateSequences` takes an allocator for its scratch frame, where the
   original mallocs it.
+- Workers need an `std.Io`: `CCtx.setIo`, or the one of a pool given with
+  `refThreadPool`. A context with workers and neither refuses with
+  `error.ParameterCombinationUnsupported`. A static context cannot make its
+  multithreaded context (`error.MemoryAllocation`); the original mallocs it.
+- `ZSTD_CCtx_reset` leaves the count of stable input not yet taken: after a
+  broken stable-input promise before a frame starts, the original's next frame
+  steps back past its input and reads out of bounds. The port's assert on it
+  panics in a safe build. Likewise `ZSTD_flushStream` and `ZSTD_endStream`
+  before a stable-input frame starts, when the context's last frame (or none)
+  buffered its input. The tests stay clear of both.
+- `ZSTD_getFrameProgression` asserts at most a block buffered, but buffers a
+  block and one byte when the pledged size is exactly a block; the port's
+  assert allows the extra byte.
+- Malformed caller sequences: the asserts in `convertBlockSequences`,
+  `get1BlockSummary`, `offsetToOffbase` and `storeSeqOnly` panic in a safe
+  build, where the original's release build carries on.
+- The original's `convertSequences` takes its AVX2 path on `__AVX2__`, even
+  with `ZSTD_NO_INTRINSICS`; the port takes its vector path only with
+  `-Dintrinsics` and AVX2. Results are the same except for lengths of 2^31
+  and over.
+- `compressSequencesAndLiterals` keeps `litCapacity` and reads only the
+  literals given. `compressSequences` ignores a frame header that does not
+  fit, as the original does (under 18 bytes of output is undefined there);
+  the tests give at least 18.
 
 ## Frame and one-shot compression
 
@@ -118,7 +138,7 @@ Pushing: `main` and the review branch go to
 | `ZSTD_compress` | `compress` | oracle-tested |
 | `ZSTD_compressBound`, `ZSTD_COMPRESSBOUND` | `compressBound` | oracle-tested |
 | `ZSTD_compressCCtx` | `CCtx.compressCCtx` | oracle-tested |
-| `ZSTD_compress2` | `CCtx.compress2` | oracle-tested (single-threaded; with workers it stops with a panic until zstdmt lands) |
+| `ZSTD_compress2` | `CCtx.compress2` | oracle-tested (through `compressStream2_simpleArgs` with stable buffers, as the original; with 1, 2 and 4 workers, job sizes, overlaps, `rsyncable`, LDM, checksum) |
 | `ZSTD_compress_advanced` | `CCtx.compressAdvanced` | oracle-tested |
 | `ZSTD_writeSkippableFrame` | `writeSkippableFrame` | oracle-tested |
 | `ZSTD_minCLevel`, `ZSTD_maxCLevel`, `ZSTD_defaultCLevel` | same | oracle-tested |
@@ -168,14 +188,14 @@ Pushing: `main` and the review branch go to
 | `ZSTD_c_targetCBlockSize` (superblocks, `zstd_compress_superblock.c`) | `.target_cblock_size` | oracle-tested |
 | `ZSTD_c_enableLongDistanceMatching`, `ldmHashLog`, `ldmMinMatch`, `ldmBucketSizeLog`, `ldmHashRateLog` | same names | oracle-tested |
 | `ZSTD_c_contentSizeFlag`, `checksumFlag`, `dictIDFlag` | same names | oracle-tested |
-| `ZSTD_c_nbWorkers`, `jobSize`, `overlapLog`, `rsyncable` | same names | bounds, set and get oracle-tested; workers wait for zstdmt (inputs up to the minimum job size compress single-threaded, oracle-tested) |
+| `ZSTD_c_nbWorkers`, `jobSize`, `overlapLog`, `rsyncable` | same names | oracle-tested (bounds, set and get; frames with 1, 2 and 4 workers through `compress2` and `compressStream2`) |
 | `ZSTD_c_format` | `.format` | oracle-tested |
 | `ZSTD_c_forceMaxWindow`, `forceAttachDict` | same names | oracle-tested |
 | `ZSTD_c_literalCompressionMode` | `.literal_compression_mode` | oracle-tested |
 | `ZSTD_c_srcSizeHint` | `.src_size_hint` | oracle-tested |
 | `ZSTD_c_enableDedicatedDictSearch` | same | oracle-tested |
-| `ZSTD_c_stableInBuffer`, `stableOutBuffer` | same | set and get oracle-tested; their buffers wait for streaming |
-| `ZSTD_c_blockDelimiters`, `validateSequences` | same | set and get oracle-tested; used by `compressSequences` (streaming branch) |
+| `ZSTD_c_stableInBuffer`, `stableOutBuffer` | same | oracle-tested (set and get; stable buffers in every mix, broken promises refused) |
+| `ZSTD_c_blockDelimiters`, `validateSequences` | same | oracle-tested (set and get; `compressSequences` in both formats, with and without validation) |
 | `ZSTD_c_blockSplitterLevel`, `splitAfterSequences` (post-split, `ZSTD_compressBlock_splitBlock`) and the pre-splitter (`zstd_preSplit.c`) | same, `pre_split.zig` | oracle-tested |
 | `ZSTD_c_useRowMatchFinder` | same | oracle-tested |
 | `ZSTD_c_deterministicRefPrefix` | same | oracle-tested |
@@ -196,9 +216,9 @@ Pushing: `main` and the review branch go to
 | original | zig-zstd | state |
 | --- | --- | --- |
 | `ZSTD_createCCtx`, `ZSTD_freeCCtx`, `ZSTD_createCCtx_advanced` (custom allocator) | `CCtx.create(gpa)`, `CCtx.destroy` | oracle-tested |
-| `ZSTD_initStaticCCtx`, `ZSTD_initStaticCStream`, `ZSTD_initStaticCDict` | `initStatic` | oracle-tested for `CCtx` and `CDict`; `initStaticCStream` waits for streaming |
+| `ZSTD_initStaticCCtx`, `ZSTD_initStaticCStream`, `ZSTD_initStaticCDict` | `initStatic` | oracle-tested |
 | context reuse: tables kept between frames, workspace resize and shrink rules | `cwksp.zig` | oracle-tested (many frames on one context, changing parameters, resets) |
-| `ZSTD_sizeof_CCtx`, `ZSTD_sizeof_CStream`, `ZSTD_sizeof_CDict` | same | oracle-tested for `CCtx` and `CDict`; `sizeof_CStream` waits for streaming |
+| `ZSTD_sizeof_CCtx`, `ZSTD_sizeof_CStream`, `ZSTD_sizeof_CDict` | same | oracle-tested |
 | `ZSTD_estimateCCtxSize*`, `ZSTD_estimateCStreamSize*`, `ZSTD_estimateCDictSize*` | same | oracle-tested |
 | `ZSTD_copyCCtx` | same | oracle-tested |
 
@@ -206,12 +226,12 @@ Pushing: `main` and the review branch go to
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| `ZSTD_compressStream2` with `ZSTD_e_continue`, `ZSTD_e_flush`, `ZSTD_e_end` | `CCtx.compressStream2` | not started |
-| `ZSTD_compressStream2_simpleArgs` | covered by `compressStream2` | not started |
-| `ZSTD_createCStream`, `freeCStream`, `CStreamInSize`, `CStreamOutSize` | `CCtx`, same sizes | not started |
-| `ZSTD_initCStream`, `_srcSize`, `_usingDict`, `_advanced`, `_usingCDict`, `_usingCDict_advanced`, `ZSTD_resetCStream` | same | not started |
-| `ZSTD_compressStream`, `ZSTD_flushStream`, `ZSTD_endStream` | same | not started |
-| `ZSTD_getFrameProgression`, `ZSTD_toFlushNow` | same | ported (single-threaded), not tested |
+| `ZSTD_compressStream2` with `ZSTD_e_continue`, `ZSTD_e_flush`, `ZSTD_e_end` | `CCtx.compressStream2` | oracle-tested (`test/stream_test.zig`: every call's result, positions and progression; every level, one-byte windows, fuzzed calls, modes, dictionaries, pledged sizes and frames; workers) |
+| `ZSTD_compressStream2_simpleArgs` | `CCtx.compressStream2SimpleArgs` | oracle-tested |
+| `ZSTD_createCStream`, `freeCStream`, `CStreamInSize`, `CStreamOutSize` | `CStream` (= `CCtx`), `cStreamInSize`, `cStreamOutSize` | oracle-tested |
+| `ZSTD_initCStream`, `_srcSize`, `_usingDict`, `_advanced`, `_usingCDict`, `_usingCDict_advanced`, `ZSTD_resetCStream` | same | oracle-tested |
+| `ZSTD_compressStream`, `ZSTD_flushStream`, `ZSTD_endStream` | same | oracle-tested |
+| `ZSTD_getFrameProgression`, `ZSTD_toFlushNow` | same | oracle-tested after every single-threaded call; with workers, run but timing-dependent, so not compared |
 | buffer-less: `ZSTD_compressBegin*`, `ZSTD_compressContinue`, `ZSTD_compressEnd`, `ZSTD_getBlockSize`, `ZSTD_compressBlock` | same | oracle-tested |
 
 ## Dictionaries
@@ -232,15 +252,15 @@ Pushing: `main` and the review branch go to
 | original | zig-zstd | state |
 | --- | --- | --- |
 | `ZSTD_sequenceBound`, `ZSTD_generateSequences`, `ZSTD_mergeBlockDelimiters` | same | oracle-tested |
-| `ZSTD_compressSequences` (with and without delimiters, validation) | same | not started (streaming branch); `validateSequence` and the delimited transfer are ported |
-| `ZSTD_compressSequencesAndLiterals` (AVX2 conversion path) | same | not started |
+| `ZSTD_compressSequences` (with and without delimiters, validation) | same | oracle-tested (`test/compress_sequences_test.zig`: generated and synthetic sequences, both formats, validation, repeat offsets, invalid sequences, small outputs) |
+| `ZSTD_compressSequencesAndLiterals` (AVX2 conversion path) | same | oracle-tested (generated and synthetic sequences, refusals; vector and scalar paths) |
 | `ZSTD_registerSequenceProducer`, `ZSTD_CCtxParams_registerSequenceProducer` (external match finders, fallback) | `SequenceProducer` | oracle-tested |
 
 ## Multithreading
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| `zstdmt_compress.c`: jobs, overlap, job size, `rsyncable`, long distance matching across jobs, checksum, flush, frame progression, `updateCParams_whileCompressing` | `zstdmt.zig` on `std.Thread` and `std.Io` locks | oracle-tested (`test/mt_test.zig`: `ZSTDMT_initCStream_internal` and `ZSTDMT_compressStream_generic` driven as `ZSTD_compressStream2` drives them, every frame equal on every run; `compressStream2` itself waits for the streaming half) |
+| `zstdmt_compress.c`: jobs, overlap, job size, `rsyncable`, long distance matching across jobs, checksum, flush, frame progression, `updateCParams_whileCompressing` | `zstdmt.zig` on `std.Thread` and `std.Io` locks | oracle-tested (`test/mt_test.zig`: `ZSTDMT_initCStream_internal` and `ZSTDMT_compressStream_generic` driven as `ZSTD_compressStream2` drives them, every frame equal on every run; and through `compressStream2` and `compress2` in `test/stream_test.zig`) |
 | `ZSTD_createThreadPool`, `ZSTD_freeThreadPool`, `ZSTD_CCtx_refThreadPool`; `pool.c` | `pool.createThreadPool`, `pool.freeThreadPool`, `CCtx.refThreadPool`; `pool.ThreadPool` | ported (unit tests in `pool.zig`; oracle-tested as a context's shared pool) |
 
 ## Build switches
@@ -250,7 +270,7 @@ Pushing: `main` and the review branch go to
 | `ZSTD_MULTITHREAD` | `-Dmultithread` (`build_options.multithread`) | ported (off: one shared pool runs jobs inline, and no multithreaded context is made) |
 | `ZSTD_NO_INTRINSICS`, `ZSTD_ARCH_X86_SSE2`, `ZSTD_ARCH_X86_AVX2`, `ZSTD_ARCH_ARM_NEON` | `-Dintrinsics`, the target's CPU features | not started |
 | `ZSTD_CLEVEL_DEFAULT` | `params.clevel_default` | not started |
-| `ZSTDMT_NBWORKERS_MAX`, `ZSTDMT_JOBSIZE_MIN`, `ZSTDMT_JOBSIZE_MAX` | `nbworkers_max`, `jobsize_min`, `jobsize_max` in `zstdmt.zig` | ported (the original's values) |
+| `ZSTDMT_NBWORKERS_MAX`, `ZSTDMT_JOBSIZE_MIN`, `ZSTDMT_JOBSIZE_MAX` | `nbworkers_max`, `jobsize_min`, `jobsize_max` in `zstdmt.zig` | ported (the original's values; the parameter bounds in `compress.zig` use them) |
 | `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY` | a build option for the tests | ported (`build_options.overflow_correct_frequently`, always off: no `-D` flag yet) |
 
 ## Left out, awaiting the author's approval
