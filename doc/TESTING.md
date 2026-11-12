@@ -169,6 +169,17 @@ Each fuzz test runs `-Dfuzz-cases` cases, 1,000 by default.
 cover the entropy coders' inputs, the block compressors, parameter sets,
 streaming calls, long distance matching and caller sequences.
 
+The parameter fuzzer (`compress2: fuzzed parameter sets ...`) sets up to 8
+parameters per case on a fresh context of each side, made one side after
+the other: window logs up to 27, hash and chain logs up to 26, long distance
+hash logs up to 27 and every hash rate. Inputs reach 3 MiB in one case of
+32 and 400 KB in one of 8. One case in 4 adds a dictionary, by copy, by
+reference, as a prefix or as a `CDict` of a random level, of up to 110 KB,
+or in one dictionary case of 4 up to 20 MiB, past the 16 MiB a `CDict` with
+tagged indexes loads whole. A context kept across cases takes the same
+values lowered to window log 25, hash and chain logs 24, long distance hash
+log 22 and rate 9, so that its tables stay small.
+
 ### Malformed input
 
 A compressor reads no encoded input except the caller's dictionaries and
@@ -182,7 +193,10 @@ two cases where the original then reads out of bounds.
 The multithreaded tests drive the port and the original with 1, 2, 3, 4
 and 8 workers. Every frame must be the original's on every run, whatever the
 threads' timing, and so must the sizes after the start of a frame, the
-frame progression whenever no job is in progress, and the errors.
+frame progression whenever no job is in progress, and the errors. The size
+is not compared after an abandoned frame: its jobs leave the pools at sizes
+that depend on the timing, in two runs of the original 9,167,360 and
+7,337,440 bytes.
 
 ### Build modes
 

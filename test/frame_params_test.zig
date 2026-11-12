@@ -160,27 +160,50 @@ test "setParameter: values that interact" {
     }
 }
 
-/// A value for `param`, mostly inside its bounds; the logs that size tables
-/// stay small enough for the test's memory.
-fn randomValue(random: std.Random, param: CParameter) i32 {
+/// How high the fuzzed logs that size tables reach.
+const Reach = enum {
+    /// For contexts kept across cases, and parameters applied to a pair at
+    /// once: tables of tens of MB.
+    narrow,
+    /// For a context of one case, one side at a time: up to a GiB of tables.
+    wide,
+};
+
+/// The highest value of `param` the fuzzers set at `reach`, below its
+/// upper bound.
+fn reachMax(param: CParameter, reach: Reach) ?i32 {
+    const wide = reach == .wide;
+    return switch (param) {
+        .window_log => if (wide) 27 else 25,
+        .hash_log, .chain_log => if (wide) 26 else 24,
+        .ldm_hash_log => if (wide) 27 else 22,
+        // A rate over the window log with the long distance hash log unset
+        // gives that table its largest size, 8 GiB; a wide case then sets
+        // the hash log (`rateUnbounded`).
+        .ldm_hash_rate_log => if (wide) null else 9,
+        .search_log => 12,
+        .nb_workers => 2,
+        else => null,
+    };
+}
+
+/// A value for `param`, mostly inside its bounds, and at most its
+/// `reachMax` there.
+fn randomValue(random: std.Random, param: CParameter, reach: Reach) i32 {
     const b = upstreamBounds(param);
-    var hi = b.upper;
-    switch (param) {
-        .window_log => hi = @min(hi, 25),
-        .hash_log, .chain_log => hi = @min(hi, 24),
-        .ldm_hash_log => hi = @min(hi, 22),
-        // A rate over the window log gives the largest hash table, of 8 GiB.
-        .ldm_hash_rate_log => hi = @min(hi, 9),
-        .search_log => hi = @min(hi, 12),
-        .nb_workers => hi = @min(hi, 2),
-        else => {},
-    }
+    const hi = @min(b.upper, reachMax(param, reach) orelse b.upper);
     return switch (random.uintLessThan(u32, 16)) {
         0 => b.lower -| 1,
         1 => hi +| 1,
         2 => 0,
         else => random.intRangeAtMost(i32, b.lower, hi),
     };
+}
+
+/// `value` lowered to `param`'s narrow reach when it is in bounds above it.
+fn narrowed(param: CParameter, value: i32) i32 {
+    const max = reachMax(param, .narrow) orelse return value;
+    return if (value > max and value <= upstreamBounds(param).upper) max else value;
 }
 
 /// Parameters that compress2 uses, for the fuzzed sets.
@@ -204,6 +227,7 @@ const fuzzed_params = [_]CParameter{
     .dict_id_flag,
     .nb_workers,
     .force_max_window,
+    .force_attach_dict,
     .literal_compression_mode,
     .src_size_hint,
     .enable_dedicated_dict_search,
@@ -217,18 +241,132 @@ const fuzzed_params = [_]CParameter{
     .stable_out_buffer,
 };
 
+/// How a fuzzed case's context takes its dictionary.
+const DictKind = enum { by_copy, by_ref, prefix, cdict };
+
+/// A dictionary for a fuzzed case.
+const FuzzedDict = struct {
+    bytes: []const u8,
+    kind: DictKind,
+    content_type: params.DictContentType,
+    /// The level of the `CDict` made from `bytes`, for `.cdict`.
+    cdict_level: i32,
+};
+
+/// A parameter set on a fresh context.
+const SetParam = struct { param: CParameter, value: i32 };
+
+/// The most parameters a fuzzed case sets.
+const set_max = 9;
+
+/// Whether `set` leaves the long distance hash log unset with a rate over
+/// the narrow reach, which may be over the window log.
+fn rateUnbounded(set: []const SetParam) bool {
+    var rate: i32 = 0;
+    var hash_log: i32 = 0;
+    for (set) |s| {
+        const b = upstreamBounds(s.param);
+        const taken = s.value == 0 or (b.lower <= s.value and s.value <= b.upper);
+        if (!taken) continue;
+        switch (s.param) {
+            .ldm_hash_rate_log => rate = s.value,
+            .ldm_hash_log => hash_log = s.value,
+            else => {},
+        }
+    }
+    return rate > reachMax(.ldm_hash_rate_log, .narrow).? and hash_log == 0;
+}
+
+/// `compress2` of `src` on a fresh context of each side, with `set` and
+/// `dict`, one side after the other so that only one side's tables take
+/// memory at a time. Every result and the frames must be the same.
+fn expectFreshCompress2(
+    set: []const SetParam,
+    dict: ?FuzzedDict,
+    src: []const u8,
+    capacity: usize,
+) !void {
+    var codes: [set_max]usize = undefined;
+    const expected = try gpa.alloc(u8, capacity);
+    defer gpa.free(expected);
+    var dict_code: usize = 0;
+    var cdict_made = false;
+    const code = blk: {
+        const cctx = c.ZSTD_createCCtx() orelse return error.OutOfMemory;
+        defer _ = c.ZSTD_freeCCtx(cctx);
+        for (set, 0..) |s, i| {
+            codes[i] = c.ZSTD_CCtx_setParameter(cctx, @backingInt(s.param), s.value);
+        }
+        var cdict: ?*c.ZSTD_CDict = null;
+        defer _ = c.ZSTD_freeCDict(cdict);
+        if (dict) |d| {
+            const ct = @backingInt(d.content_type);
+            const method: c_uint = if (d.kind == .by_ref) 1 else 0;
+            dict_code = switch (d.kind) {
+                .by_copy, .by_ref => c.ZSTD_CCtx_loadDictionary_advanced(
+                    cctx,
+                    d.bytes.ptr,
+                    d.bytes.len,
+                    method,
+                    ct,
+                ),
+                .prefix => c.ZSTD_CCtx_refPrefix_advanced(cctx, d.bytes.ptr, d.bytes.len, ct),
+                .cdict => cd: {
+                    cdict = c.ZSTD_createCDict(d.bytes.ptr, d.bytes.len, d.cdict_level);
+                    cdict_made = cdict != null;
+                    break :cd c.ZSTD_CCtx_refCDict(cctx, cdict);
+                },
+            };
+        }
+        break :blk c.ZSTD_compress2(cctx, expected.ptr, expected.len, src.ptr, src.len);
+    };
+
+    const port = try zstd.CCtx.create(gpa);
+    defer port.destroy() catch unreachable;
+    // Inputs over a job's minimum size take workers.
+    port.setIo(std.testing.io);
+    for (set, 0..) |s, i| {
+        expectSameResult(codes[i], port.setParameter(s.param, s.value)) catch |err| {
+            std.debug.print("{t} = {d}\n", .{ s.param, s.value });
+            return err;
+        };
+    }
+    var cdict: ?*zstd.CDict = null;
+    defer if (cdict) |cd| cd.destroy();
+    if (dict) |d| {
+        const result = switch (d.kind) {
+            .by_copy => port.loadDictionaryAdvanced(d.bytes, .by_copy, d.content_type),
+            .by_ref => port.loadDictionaryAdvanced(d.bytes, .by_ref, d.content_type),
+            .prefix => port.refPrefixAdvanced(d.bytes, d.content_type),
+            .cdict => cd: {
+                cdict = zstd.CDict.create(gpa, d.bytes, d.cdict_level) catch null;
+                try testing.expectEqual(cdict_made, cdict != null);
+                break :cd port.refCDict(cdict);
+            },
+        };
+        try expectSameResult(dict_code, result);
+    }
+    const dst = try gpa.alloc(u8, capacity);
+    defer gpa.free(dst);
+    const result = port.compress2(dst, src);
+    try expectSameResult(code, result);
+    const size = result catch return;
+    try common.expectSameFrame(expected[0..code], dst[0..size]);
+}
+
 test "compress2: fuzzed parameter sets, fresh and reused contexts" {
     const seed = common.fuzzSeed(53);
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
-    const input = try common.generated(400_000, 0.5, 0.3, 53);
-    defer gpa.free(input);
+    // Inputs come from the first 3 MiB, dictionaries from anywhere.
+    const data = try common.generated(20 << 20, 0.5, 0.3, 53);
+    defer gpa.free(data);
+    const input = data[0 .. 3 << 20];
     const reused = try Pair.init();
     defer reused.deinit();
+    reused.port.setIo(std.testing.io);
     for (0..common.fuzz_cases) |case| {
         errdefer std.debug.print("seed {d}, case {d}\n", .{ seed, case });
-        const fresh = try Pair.init();
-        defer fresh.deinit();
         if (random.uintLessThan(u32, 4) == 0) {
             const directive: params.ResetDirective = @fromBackingInt(
                 random.intRangeAtMost(u32, 1, 3),
@@ -238,24 +376,53 @@ test "compress2: fuzzed parameter sets, fresh and reused contexts" {
                 reused.port.reset(directive),
             );
         }
-        const nb_params = random.uintAtMost(usize, 8);
-        for (0..nb_params) |_| {
+        // The fresh contexts take the values as drawn, the reused one
+        // takes them narrowed.
+        var set_buffer: [set_max]SetParam = undefined;
+        var nb_set = random.uintAtMost(usize, set_max - 1);
+        for (set_buffer[0..nb_set]) |*s| {
             const param = fuzzed_params[random.uintLessThan(usize, fuzzed_params.len)];
-            const value = randomValue(random, param);
-            try fresh.set(param, value);
-            try reused.set(param, value);
+            s.* = .{ .param = param, .value = randomValue(random, param, .wide) };
+            try reused.set(param, narrowed(param, s.value));
         }
-        const size = if (random.uintLessThan(u32, 8) == 0)
-            random.uintAtMost(usize, input.len)
-        else
-            random.uintAtMost(usize, 40_000);
+        // The long distance hash log, where the rate could make it 8 GiB.
+        if (rateUnbounded(set_buffer[0..nb_set])) {
+            set_buffer[nb_set] = .{
+                .param = .ldm_hash_log,
+                .value = random.intRangeAtMost(i32, params.hash_log_min, 27),
+            };
+            nb_set += 1;
+        }
+        const set = set_buffer[0..nb_set];
+        const dict: ?FuzzedDict = if (random.uintLessThan(u32, 4) == 0) .{
+            .bytes = blk: {
+                const max: usize = if (random.uintLessThan(u32, 4) == 0) data.len else 110_000;
+                const len = random.uintAtMost(usize, max);
+                break :blk data[random.uintAtMost(usize, data.len - len)..][0..len];
+            },
+            .kind = random.enumValueWithIndex(DictKind, u32),
+            .content_type = if (random.uintLessThan(u32, 8) == 0) .full_dict else .auto,
+            .cdict_level = random.intRangeAtMost(i32, -5, 22),
+        } else null;
+        const size = switch (random.uintLessThan(u32, 64)) {
+            0, 1 => random.uintAtMost(usize, input.len),
+            2...9 => random.uintAtMost(usize, 400_000),
+            else => random.uintAtMost(usize, 40_000),
+        };
         const start = random.uintAtMost(usize, input.len - size);
         const src = input[start..][0..size];
         const capacity = if (random.uintLessThan(u32, 16) == 0)
             random.uintAtMost(usize, c.ZSTD_compressBound(size))
         else
             c.ZSTD_compressBound(size);
-        _ = try fresh.compress2(src, capacity);
+        expectFreshCompress2(set, dict, src, capacity) catch |err| {
+            std.debug.print("fresh context: {any}\n", .{set});
+            if (dict) |d| std.debug.print(
+                "dictionary of {d} bytes, {t}, {t}, level {d}\n",
+                .{ d.bytes.len, d.kind, d.content_type, d.cdict_level },
+            );
+            return err;
+        };
         _ = try reused.compress2(src, capacity);
         try expectSameParameters(reused);
     }
@@ -457,7 +624,7 @@ test "CCtxParams: set, get, init, reset, and applied to a context" {
             },
             else => for (0..random.uintAtMost(usize, 4)) |_| {
                 const param = fuzzed_params[random.uintLessThan(usize, fuzzed_params.len)];
-                try held.set(param, randomValue(random, param));
+                try held.set(param, randomValue(random, param, .narrow));
             },
         }
         try held.expectSame();
