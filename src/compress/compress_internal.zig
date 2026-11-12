@@ -1476,45 +1476,80 @@ pub const BlockSummary = struct {
 const testing = std.testing;
 
 /// A match state and sequence store set up over one block of input as a
-/// fresh compression sets them up, for testing a block compressor on its
-/// own. The tables are allocated with `gpa` and zeroed.
+/// fresh compression of one block sets them up, for testing a block
+/// compressor on its own. The tables are allocated with `gpa` and zeroed.
+/// It holds pointers into itself and into `src` and the dictionary, so it
+/// stays where `create` put it, and `src` and the dictionary outlive it.
 pub const BlockTest = struct {
     gpa: std.mem.Allocator,
     ms: MatchState,
+    dict_ms: MatchState,
     seq_store: SeqStore,
     sequences: []SeqDef,
     literals: []u8,
     hash_table: []u32,
     chain_table: []u32,
+    dict_hash_table: []u32,
+    dict_chain_table: []u32,
     rep: [rep_num]u32,
 
-    /// A fresh compression of `src` with `cparams`: the window is initialised,
-    /// then updated with `src` as the first segment; `next_to_update` is the
-    /// window's start; the maximum distance is enforced; the repeat offsets
-    /// are the format's starting ones. The hash table has `1 << hash_log`
-    /// entries, the chain table `1 << chain_log`, both zeroed.
-    pub fn init(
+    pub const Dict = union(enum) {
+        none,
+        /// Loaded into the context's own tables (raw content, by copy or
+        /// reference), then out of the prefix when the block comes: an
+        /// external dictionary.
+        ext: []const u8,
+        /// Loaded into a dictionary's tables with `cparams`, then attached
+        /// as the dict match state.
+        attached: struct {
+            content: []const u8,
+            cparams: params.CompressionParameters,
+        },
+    };
+
+    /// A strategy's table fill (`fast.fillHashTable`, ...).
+    pub const FillTables = *const fn (
+        ms: *MatchState,
+        end: [*]const u8,
+        dtlm: DictTableLoadMethod,
+        tfp: TableFillPurpose,
+    ) void;
+
+    /// The steps of a fresh compression of `src` with `cparams`, as one block:
+    /// the match state is reset (window initialised and cleared,
+    /// `next_to_update` at its start), the dictionary loaded and attached as
+    /// `ZSTD_loadDictionaryContent` and `ZSTD_resetCCtx_byAttachingCDict` do,
+    /// with `fill`; then the window takes `src` and the dictionary's validity
+    /// and the maximum distance are enforced, as `ZSTD_compress_frameChunk`
+    /// does, and `next_to_update` is limited as `ZSTD_buildSeqStore` does.
+    /// The repeat offsets are the format's starting ones. The tables have
+    /// `1 << hash_log` and `1 << chain_log` entries.
+    pub fn create(
         gpa: std.mem.Allocator,
         cparams: params.CompressionParameters,
         src: []const u8,
-    ) !BlockTest {
-        var self: BlockTest = .{
+        dict: Dict,
+        fill: ?FillTables,
+    ) !*BlockTest {
+        const self = try gpa.create(BlockTest);
+        self.* = .{
             .gpa = gpa,
             .ms = .{},
+            .dict_ms = .{},
             .seq_store = .{},
             .sequences = &.{},
             .literals = &.{},
             .hash_table = &.{},
             .chain_table = &.{},
+            .dict_hash_table = &.{},
+            .dict_chain_table = &.{},
             .rep = zstd_internal.rep_start_value,
         };
-        errdefer self.deinit();
+        errdefer self.destroy();
         self.sequences = try gpa.alloc(SeqDef, src.len / min_match + 1);
         self.literals = try gpa.alloc(u8, src.len + zstd_internal.wildcopy_overlength);
-        self.hash_table = try gpa.alloc(u32, @as(usize, 1) << @intCast(cparams.hash_log));
-        self.chain_table = try gpa.alloc(u32, @as(usize, 1) << @intCast(cparams.chain_log));
-        @memset(self.hash_table, 0);
-        @memset(self.chain_table, 0);
+        self.hash_table = try zeroedTable(gpa, cparams.hash_log);
+        self.chain_table = try zeroedTable(gpa, cparams.chain_log);
 
         self.seq_store = .{
             .sequences_start = self.sequences.ptr,
@@ -1531,25 +1566,88 @@ pub const BlockTest = struct {
         ms.hash_table = self.hash_table.ptr;
         ms.chain_table = self.chain_table.ptr;
         ms.cparams = cparams;
-        if (!ms.window.update(src, false)) ms.next_to_update = ms.window.dict_limit;
+
+        switch (dict) {
+            .none => {},
+            .ext => |content| loadDictContent(ms, content, .fast, .for_cctx, fill.?),
+            .attached => |attached| {
+                const dms = &self.dict_ms;
+                self.dict_hash_table = try zeroedTable(gpa, attached.cparams.hash_log);
+                self.dict_chain_table = try zeroedTable(gpa, attached.cparams.chain_log);
+                dms.window.init();
+                dms.window.clear();
+                dms.next_to_update = dms.window.dict_limit;
+                dms.hash_table = self.dict_hash_table.ptr;
+                dms.chain_table = self.dict_chain_table.ptr;
+                dms.cparams = attached.cparams;
+                loadDictContent(dms, attached.content, .full, .for_cdict, fill.?);
+                const cdict_end: u32 = @intCast(@intFromPtr(dms.window.next_src) -
+                    @intFromPtr(dms.window.base));
+                if (cdict_end - dms.window.dict_limit != 0) {
+                    ms.dict_match_state = dms;
+                    if (ms.window.dict_limit < cdict_end) {
+                        ms.window.next_src = ms.window.base + cdict_end;
+                        ms.window.clear();
+                    }
+                    ms.loaded_dict_end = ms.window.dict_limit;
+                }
+            },
+        }
+
+        if (!ms.window.update(src, ms.force_non_contiguous)) {
+            ms.force_non_contiguous = false;
+            ms.next_to_update = ms.window.dict_limit;
+        }
         const max_dist = @as(u32, 1) << @intCast(cparams.window_log);
         const block_end = src.ptr + src.len;
         ms.window.checkDictValidity(block_end, max_dist, &ms.loaded_dict_end, &ms.dict_match_state);
         ms.window.enforceMaxDist(src.ptr, max_dist, &ms.loaded_dict_end, &ms.dict_match_state);
         if (ms.next_to_update < ms.window.low_limit) ms.next_to_update = ms.window.low_limit;
+
+        const curr: u32 = @intCast(@intFromPtr(src.ptr) - @intFromPtr(ms.window.base));
+        if (curr > ms.next_to_update + 384) {
+            ms.next_to_update = curr - @min(192, curr - ms.next_to_update - 384);
+        }
         return self;
     }
 
-    pub fn deinit(self: *BlockTest) void {
-        self.gpa.free(self.sequences);
-        self.gpa.free(self.literals);
-        self.gpa.free(self.hash_table);
-        self.gpa.free(self.chain_table);
+    fn zeroedTable(gpa: std.mem.Allocator, log: u32) ![]u32 {
+        const table = try gpa.alloc(u32, @as(usize, 1) << @intCast(log));
+        @memset(table, 0);
+        return table;
+    }
+
+    /// `ZSTD_loadDictionaryContent`'s steps for the match state alone.
+    fn loadDictContent(
+        ms: *MatchState,
+        dict: []const u8,
+        dtlm: DictTableLoadMethod,
+        tfp: TableFillPurpose,
+        fill: FillTables,
+    ) void {
+        const iend = dict.ptr + dict.len;
+        _ = ms.window.update(dict, false);
+        ms.next_to_update = @intCast(@intFromPtr(dict.ptr) - @intFromPtr(ms.window.base));
+        ms.loaded_dict_end = @intCast(@intFromPtr(iend) - @intFromPtr(ms.window.base));
+        if (dict.len <= hash_read_size) return;
+        fill(ms, iend, dtlm, tfp);
+        ms.next_to_update = @intCast(@intFromPtr(iend) - @intFromPtr(ms.window.base));
+    }
+
+    pub fn destroy(self: *BlockTest) void {
+        const gpa = self.gpa;
+        gpa.free(self.sequences);
+        gpa.free(self.literals);
+        gpa.free(self.hash_table);
+        gpa.free(self.chain_table);
+        gpa.free(self.dict_hash_table);
+        gpa.free(self.dict_chain_table);
         self.* = undefined;
+        gpa.destroy(self);
     }
 
     /// Runs `compressor` over `src`, then stores the last literals, as
-    /// `buildSeqStore` does; returns the size of the last literals.
+    /// `ZSTD_buildSeqStore` does; returns the size of the last literals.
     pub fn run(self: *BlockTest, compressor: BlockCompressor, src: []const u8) usize {
         const last_ll_size = compressor(&self.ms, &self.seq_store, &self.rep, src);
         const last_literals = src[src.len - last_ll_size ..];
@@ -1567,7 +1665,8 @@ pub const BlockTest = struct {
 
     /// The literals stored, the last ones included.
     pub fn storedLiterals(self: *const BlockTest) []const u8 {
-        return self.literals[0 .. @intFromPtr(self.seq_store.lit) - @intFromPtr(self.literals.ptr)];
+        const n = @intFromPtr(self.seq_store.lit) - @intFromPtr(self.literals.ptr);
+        return self.literals[0..n];
     }
 };
 

@@ -171,3 +171,42 @@ pub extern fn reference_genBuffer(
     lit_proba: f64,
     seed: c_uint,
 ) void;
+
+/// The original's `SeqDef`, one stored sequence.
+pub const SeqDef = extern struct {
+    off_base: u32,
+    lit_length: u16,
+    ml_base: u16,
+};
+
+/// The original's block compressor run on one block, after the setup of a
+/// fresh compression (test/reference.c). `dict_kind`: 0 none, 1 an external
+/// dictionary, 2 an attached one. Returns the size of the last literals.
+pub extern fn reference_blockTest(
+    cparams: *const ZSTD_compressionParameters,
+    dict_kind: c_int,
+    dict: ?*const anyopaque,
+    dict_size: usize,
+    dict_cparams: *const ZSTD_compressionParameters,
+    src: ?*const anyopaque,
+    src_size: usize,
+    hash_table: [*]u32,
+    chain_table: [*]u32,
+    dict_hash_table: ?[*]u32,
+    dict_chain_table: ?[*]u32,
+    seqs: [*]SeqDef,
+    seq_capacity: usize,
+    lits: [*]u8,
+    lit_capacity: usize,
+    rep: *[3]u32,
+    nb_seq: *usize,
+    nb_lit: *usize,
+    long_length_type: *u32,
+    long_length_pos: *u32,
+) usize;
+
+/// The compression parameters `cctx` applied in its last compression.
+pub extern fn reference_appliedCParams(
+    cctx: *const ZSTD_CCtx,
+    cparams: *ZSTD_compressionParameters,
+) void;
