@@ -7,7 +7,8 @@ pub const Error = @import("error.zig").Error;
 pub const ErrorCode = @import("error.zig").ErrorCode;
 pub const errorCode = @import("error.zig").errorCode;
 
-/// The compressor's parts, public for the oracle tests and the benchmark.
+/// The compressor's parts, for the oracle tests, which compare each with
+/// the original's on its own, and the benchmark.
 pub const internal = struct {
     pub const bitstream = @import("common/bitstream.zig");
     pub const entropy_common = @import("common/entropy_common.zig");
@@ -16,6 +17,12 @@ pub const internal = struct {
     pub const fse_compress = @import("compress/fse_compress.zig");
     pub const hist = @import("compress/hist.zig");
     pub const huf_compress = @import("compress/huf_compress.zig");
+    pub const compress_internal = @import("compress/compress_internal.zig");
+    pub const cwksp = @import("compress/cwksp.zig");
+    pub const clevels = @import("compress/clevels.zig");
+    pub const fast = @import("compress/fast.zig");
+    pub const double_fast = @import("compress/double_fast.zig");
+    pub const ldm = @import("compress/ldm.zig");
 };
 
 test {
@@ -28,4 +35,10 @@ test {
     _ = @import("compress/fse_compress.zig");
     _ = @import("compress/hist.zig");
     _ = @import("compress/huf_compress.zig");
+    _ = @import("compress/compress_internal.zig");
+    _ = @import("compress/cwksp.zig");
+    _ = @import("compress/clevels.zig");
+    _ = @import("compress/fast.zig");
+    _ = @import("compress/double_fast.zig");
+    _ = @import("compress/ldm.zig");
 }

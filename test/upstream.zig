@@ -400,3 +400,150 @@ pub extern fn reference_fseBitCost(
     accuracy_log: c_uint,
 ) c_uint;
 pub extern fn reference_fseGetMaxNbBits(ct: [*]const c_uint, symbol: c_uint) c_uint;
+/// The original's `SeqDef`, one stored sequence.
+pub const SeqDef = extern struct {
+    off_base: u32,
+    lit_length: u16,
+    ml_base: u16,
+};
+
+/// The original's block compressor run on one block, after the setup of a
+/// fresh compression (test/reference.c). `dict_kind`: 0 none, 1 an external
+/// dictionary, 2 an attached one. Returns the size of the last literals.
+pub extern fn reference_blockTest(
+    cparams: *const ZSTD_compressionParameters,
+    dict_kind: c_int,
+    dict: ?*const anyopaque,
+    dict_size: usize,
+    dict_cparams: *const ZSTD_compressionParameters,
+    src: ?*const anyopaque,
+    src_size: usize,
+    hash_table: [*]u32,
+    chain_table: [*]u32,
+    dict_hash_table: ?[*]u32,
+    dict_chain_table: ?[*]u32,
+    seqs: [*]SeqDef,
+    seq_capacity: usize,
+    lits: [*]u8,
+    lit_capacity: usize,
+    rep: *[3]u32,
+    nb_seq: *usize,
+    nb_lit: *usize,
+    long_length_type: *u32,
+    long_length_pos: *u32,
+) usize;
+
+/// The compression parameters `cctx` applied in its last compression.
+pub extern fn reference_appliedCParams(
+    cctx: *const ZSTD_CCtx,
+    cparams: *ZSTD_compressionParameters,
+) void;
+
+// Long distance matching: helpers in test/reference.c over the original's
+// zstd_ldm.c. Parameters go as six numbers: enable, hash log, bucket size
+// log, minimum match length, hash rate log, window log.
+
+/// `rawSeq`.
+pub const RawSeq = extern struct {
+    offset: u32,
+    lit_length: u32,
+    match_length: u32,
+};
+
+/// `ldmEntry_t`.
+pub const LdmEntry = extern struct {
+    offset: u32,
+    checksum: u32,
+};
+
+pub const ReferenceLdm = opaque {};
+
+pub extern fn reference_ldm_adjustParameters(
+    p: *[6]c_uint,
+    cparams: *const ZSTD_compressionParameters,
+) void;
+pub extern fn reference_ldm_getTableSize(p: *const [6]c_uint) usize;
+pub extern fn reference_ldm_getMaxNbSeq(p: *const [6]c_uint, max_chunk_size: usize) usize;
+pub extern fn reference_ldm_gearInit(
+    state: *[2]u64,
+    min_match_length: c_uint,
+    hash_rate_log: c_uint,
+) void;
+pub extern fn reference_ldm_gearReset(
+    state: *[2]u64,
+    data: [*]const u8,
+    min_match_length: usize,
+) void;
+pub extern fn reference_ldm_gearFeed(
+    state: *[2]u64,
+    data: [*]const u8,
+    size: usize,
+    splits: *[64]usize,
+    num_splits: *c_uint,
+) usize;
+pub extern fn reference_ldm_skipSequences(
+    seqs: [*]RawSeq,
+    size: usize,
+    pos: *usize,
+    src_size: usize,
+    min_match: c_uint,
+) void;
+pub extern fn reference_ldm_skipRawSeqStoreBytes(
+    seqs: [*]RawSeq,
+    size: usize,
+    pos: *usize,
+    pos_in_sequence: *usize,
+    nb_bytes: usize,
+) void;
+pub extern fn reference_ldm_maybeSplitSequence(
+    seqs: [*]RawSeq,
+    size: usize,
+    pos: *usize,
+    remaining: c_uint,
+    min_match: c_uint,
+    out: *RawSeq,
+) void;
+pub extern fn reference_ldm_create(p: *const [6]c_uint) ?*ReferenceLdm;
+pub extern fn reference_ldm_free(ldm: ?*ReferenceLdm) void;
+pub extern fn reference_ldm_hashTable(ldm: *const ReferenceLdm) [*]const LdmEntry;
+pub extern fn reference_ldm_bucketOffsets(ldm: *const ReferenceLdm) [*]const u8;
+pub extern fn reference_ldm_window(ldm: *const ReferenceLdm, out: *[7]usize) void;
+pub extern fn reference_ldm_shiftIndexes(ldm: *ReferenceLdm, shift: c_uint) void;
+pub extern fn reference_ldm_update(ldm: *ReferenceLdm, src: [*]const u8, size: usize) c_uint;
+pub extern fn reference_ldm_loadDictionary(
+    ldm: *ReferenceLdm,
+    dict: [*]const u8,
+    size: usize,
+    force_window: c_int,
+) void;
+pub extern fn reference_ldm_fillHashTable(ldm: *ReferenceLdm, src: [*]const u8, size: usize) void;
+pub extern fn reference_ldm_generateSequences(
+    ldm: *ReferenceLdm,
+    src: [*]const u8,
+    size: usize,
+    capacity: usize,
+    seqs: *[*]const RawSeq,
+    nb_seqs: *usize,
+) usize;
+/// One block compressed with long distance matching after the setup of a
+/// fresh compression without a dictionary (test/reference.c). Returns the
+/// size of the last literals, or the generator's error code.
+pub extern fn reference_ldmBlockTest(
+    cparams: *const ZSTD_compressionParameters,
+    ldm: *ReferenceLdm,
+    src: [*]const u8,
+    src_size: usize,
+    raw_capacity: usize,
+    hash_table: [*]u32,
+    chain_table: [*]u32,
+    seqs: [*]SeqDef,
+    seq_capacity: usize,
+    lits: [*]u8,
+    lit_capacity: usize,
+    rep: *[3]u32,
+    nb_seq: *usize,
+    nb_lit: *usize,
+    long_length_type: *u32,
+    long_length_pos: *u32,
+    nb_raw: *usize,
+) usize;

@@ -1,6 +1,8 @@
 //! The format's constants and code tables, shared by the compressor's
 //! parts, from the original's zstd_internal.h.
 
+const std = @import("std");
+
 pub const opt_num = 1 << 12;
 /// The number of repeat offsets.
 pub const rep_num = 3;
@@ -102,3 +104,52 @@ pub const BufferMode = enum(u1) {
     /// The caller keeps input and output stable between calls.
     stable = 1,
 };
+
+/// Copies 16 bytes; the two ranges may overlap.
+pub inline fn copy16(dst: [*]u8, src: [*]const u8) void {
+    const bytes: [16]u8 = src[0..16].*;
+    dst[0..16].* = bytes;
+}
+
+/// The original's `ZSTD_overlap_e`.
+pub const Overlap = enum {
+    /// Source and destination are at least `wildcopy_veclen` bytes apart.
+    no_overlap,
+    /// The source is before the destination, at least 8 bytes apart.
+    src_before_dst,
+};
+
+/// `ZSTD_wildcopy`: copies `length` bytes in 16-byte steps (8-byte steps for
+/// close overlapping ranges), so it may read and write up to
+/// `wildcopy_overlength` bytes past the end of both ranges.
+pub inline fn wildcopy(dst: [*]u8, src: [*]const u8, length: isize, comptime overlap: Overlap) void {
+    const diff = @as(isize, @bitCast(@intFromPtr(dst))) -% @as(isize, @bitCast(@intFromPtr(src)));
+    var ip = src;
+    var op = dst;
+    const oend = @intFromPtr(op) +% @as(usize, @bitCast(length));
+    if (overlap == .src_before_dst and diff < wildcopy_veclen) {
+        while (true) {
+            const bytes: [8]u8 = ip[0..8].*;
+            op[0..8].* = bytes;
+            op += 8;
+            ip += 8;
+            if (@intFromPtr(op) >= oend) break;
+        }
+    } else {
+        std.debug.assert(diff >= wildcopy_veclen or diff <= -wildcopy_veclen);
+        // The first copy is on its own: the length is almost always short.
+        copy16(op, ip);
+        if (16 >= length) return;
+        op += 16;
+        ip += 16;
+        while (true) {
+            copy16(op, ip);
+            op += 16;
+            ip += 16;
+            copy16(op, ip);
+            op += 16;
+            ip += 16;
+            if (@intFromPtr(op) >= oend) break;
+        }
+    }
+}
