@@ -32,7 +32,8 @@ test runs 1,000 cases. Frames are compared byte for byte with the original's, an
 frame decodes through std's decoder and the original's.
 
 **Speed and ratio** (Silesia, one thread, `zig build bench`, before the performance pass;
-`doc/BENCHMARKS.md`). Ratios are equal at every level, since the frames are equal.
+`doc/BENCHMARKS.md` has the numbers after the second pass). Ratios are equal at every
+level, since the frames are equal.
 
 | levels | port against the original |
 | --- | --- |
@@ -114,7 +115,7 @@ author's session on 11 November, during step 5.
   no branch between them. Measured in the final state with and without it, level 1 goes
   from 1.021 to 1.000 and levels -1 to 3 gain 0.5% to 1.6%. Added on its own after
   `seqToCodes` it measured slower: changes of 1% to 2% are the size of the swings between
-  builds, so the last four changes are each measured in the final state.
+  builds, so this change and the next two are each measured in the final state.
 - Kept: `getLowerBits` masks with `bzhi` on BMI2 targets built with intrinsics, as
   `BIT_getLowerBits` does. In the final state, every level but 4 0.1% to 2.4% faster
   with it, level 4 0.6% and 1.0% slower.
@@ -125,21 +126,28 @@ author's session on 11 November, during step 5.
   overlap.
 - Kept: the bench runs the multithreaded rows (`port_multithread_merged = true`); the
   port's context gets the bench's `Io` before `nb_workers`.
-- Level 1 (fast): the search loop compiles to the same 51 instructions per two positions
-  as the original's, and the function runs as many instructions; the gap is in cycles,
-  not yet explained. Levels 5 to 8 (row matcher): the port runs no more instructions
-  than the original over the whole level; the row search is the same code.
-- `encodeSequences` masks with a table load where the original uses BMI2 `bzhi`
-  (`BIT_getLowerBits`): 5% to 6% more instructions there, and it is a sixth of the work
-  at level 4. Next: `getLowerBits` with `bzhi`, measured at levels 1, 3 and 4; then the
-  repeat-offset test as a non-short-circuit `&` in dfast, as the original's.
-  `std.mem.copyForwards` in `zstdmt.zig` is a byte loop (the original uses memmove);
-  check before the MT rows.
-- At the end: set `port_multithread_merged = true` in bench/bench.zig if the MT rows run,
-  and replace the table in `doc/BENCHMARKS.md` from one full pinned `--runs 5` run.
+- The final run (`doc/BENCHMARKS.md`, the whole run pinned, huge pages off): faster or
+  within noise at levels -5, -1, 3, 4 and 10 to 22 (3.5% faster at 10, 1.6% to 2.8% from
+  13); slower at level 1 by 2.1%, level 2 0.8%, levels 5 to 9 1.5% to 3.6%. There the port
+  runs as many instructions as the original or fewer (0.95 at level 1, 0.99 to 1.00 at 5
+  to 8), and the gap moves with where the code sits: a build with the same port code 1360
+  bytes earlier measured level 1 at 1.00 and levels 5 to 8 at 0.99 to 1.02; profiles of
+  the two show the port's hot loops taking 2% to 14% more cycles for the same instructions.
+  The kept source changes above are each worth 1% to 2%, the size of those swings.
+- The multithreaded rows run and give the same frames; on five cores level 3 with 4
+  workers is even (1.002) and level 19 within noise.
+- The full suite (`zig build test -Dcorpus=false`) passes 293 of 300, 6 skipped; the
+  failure is the timing-dependent multithreading test in the open points below, which
+  fails the same way on the sources before the pass's changes.
+- Left as is: the prefix copy in `zstdmt.zig` is `std.mem.copyForwards`, a byte loop where
+  the original uses memmove; it runs once each time the round buffer wraps.
+- Tried and dropped: the dfast repeat-offset test as `&` (no change in time), glibc's
+  `glibc.malloc.hugetlb` tunable for the huge-page bias (no effect).
+- Next, if wanted: why the row matcher's searches at levels 5 to 9 and the fast loop at
+  level 1 lose cycles in some layouts (`perf annotate` of both builds' hot loops).
 
 **To resume.**
-1. Step 5 on `review/perf-2`: continue from the notes above.
+1. Step 5 is done on `review/perf-2` (the notes above); the branch is not merged.
 2. Step 6, a fresh skeptic agent on the same branch, with the open points below as a
    start: upstream asserts that safe builds turn into panics on caller-supplied
    dictionaries and sequences, the two upstream out-of-bounds reads the stream tests avoid,
@@ -214,6 +222,13 @@ Pushing: `main` and the review branch go to
   literals given. `compressSequences` ignores a frame header that does not
   fit, as the original does (under 18 bytes of output is undefined there);
   the tests give at least 18.
+- The multithreading test "a context reused, resized, abandoned mid-frame, on
+  a shared pool" compares the context's size right after a frame is
+  abandoned. That size counts the worker contexts the abandoned jobs
+  created, which follows the threads' timing: on a loaded machine (12
+  November), the port's came out one or two contexts short of the
+  original's (9167360 and 7337440 bytes against 10997280), with and without
+  the second performance pass's changes.
 
 ## Frame and one-shot compression
 
