@@ -125,7 +125,12 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
   - Probes that found nothing: pledged sizes near 2^64 with dictionaries, CDicts,
     prefixes and workers; LDM hash logs 25 to 27, bucket log 8, minimum matches 4 to
     4096, rates 0 to 25, window logs 27 to 31; size hints near 2^31 with dictionaries;
-    `max_block_size` 1024 with superblocks.
+    `max_block_size` 1024 with superblocks; CDicts of 16 MiB less 3 bytes to 20 MiB,
+    past the short cache's limit, at levels -5 to 4 with every attach mode; eight
+    workers with long distance matching on 512 KiB jobs, streamed in small pieces with
+    flushes and small output windows, six runs of each; an input of 3.5 GiB and 8 MiB
+    at levels 1, 5 and 13, through indexes past 2^31 and the overflow correction at its
+    real threshold (3500 MiB).
 - `review/perf-2` (worktree `zig-zstd.wt/perf2`): the second perf pass, made from
   `review/perf-and-skeptic`. Its target is no level slower than upstream, level 3 and 4
   first. Each kept change is one commit with its pinned-core gain in the message; its
