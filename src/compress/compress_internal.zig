@@ -61,30 +61,57 @@ pub const short_cache_tag_bits = 8;
 pub const short_cache_tag_mask: u32 = (1 << short_cache_tag_bits) - 1;
 
 // ---------------------------------------------------------------------------
-// Placeholders for types defined in files not yet ported
+// Types defined with the code that uses them
 // ---------------------------------------------------------------------------
 
-/// The original's `ZSTD_CDict_s`, defined in zstd_compress.c.
-pub const CDict = opaque {};
+/// The original's `ZSTD_CDict_s`, defined in compress.zig as the original
+/// defines it in zstd_compress.c.
+pub const CDict = @import("compress.zig").CDict;
 /// The original's `ZSTD_threadPool` (POOL_ctx), from pool.c.
-pub const ThreadPool = opaque {};
+pub const ThreadPool = @import("../common/pool.zig").ThreadPool;
 /// The original's `ZSTDMT_CCtx`, from zstdmt_compress.c.
-pub const ZstdmtCCtx = opaque {};
+pub const ZstdmtCCtx = @import("zstdmt.zig").ZstdmtCCtx;
 
-/// The original's `ZSTD_sequenceProducer_F`: an external match finder that
-/// writes up to `out_seqs_capacity` sequences for `src` and returns their
-/// number, or a value above `sequence_producer_error`.
-pub const SequenceProducer = *const fn (
-    state: ?*anyopaque,
-    out_seqs: [*]params.Sequence,
-    out_seqs_capacity: usize,
-    src: [*]const u8,
-    src_size: usize,
-    dict: ?[*]const u8,
-    dict_size: usize,
-    compression_level: i32,
-    window_size: usize,
-) callconv(.c) usize;
+/// The value a sequence producer returns when it fails, the original's
+/// `ZSTD_SEQUENCE_PRODUCER_ERROR`.
+pub const sequence_producer_error: usize = std.math.maxInt(usize);
+
+/// The original's `ZSTD_sequenceProducer_F` with its state: an external match
+/// finder. `produce` writes up to `out_seqs.len` sequences for `src`, the
+/// last one a block delimiter or not, and returns their number, or any value
+/// above `out_seqs.len` (such as `sequence_producer_error`) when it fails.
+/// `dict` is empty: dictionaries are not passed to producers. `context` is
+/// the caller's, kept by the parameters that register it until they are
+/// reset; the caller keeps it valid that long.
+pub const SequenceProducer = struct {
+    context: ?*anyopaque,
+    produce_fn: *const fn (
+        context: ?*anyopaque,
+        out_seqs: []params.Sequence,
+        src: []const u8,
+        dict: []const u8,
+        compression_level: i32,
+        window_size: usize,
+    ) usize,
+
+    pub fn produce(
+        producer: SequenceProducer,
+        out_seqs: []params.Sequence,
+        src: []const u8,
+        dict: []const u8,
+        compression_level: i32,
+        window_size: usize,
+    ) usize {
+        return producer.produce_fn(
+            producer.context,
+            out_seqs,
+            src,
+            dict,
+            compression_level,
+            window_size,
+        );
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Context memory management
@@ -675,7 +702,17 @@ pub const SeqCollector = struct {
 /// `ZSTD_CCtx_params_s`.
 pub const CCtxParams = struct {
     format: params.Format = .zstd1,
-    cparams: params.CompressionParameters = undefined,
+    /// In requested parameters, 0 in a field (strategy 0 included) leaves
+    /// it to the level; applied parameters are all set.
+    cparams: params.CompressionParameters = .{
+        .window_log = 0,
+        .chain_log = 0,
+        .hash_log = 0,
+        .search_log = 0,
+        .min_match = 0,
+        .target_length = 0,
+        .strategy = @fromBackingInt(0),
+    },
     fparams: params.FrameParameters = .{},
 
     compression_level: i32 = 0,
@@ -693,7 +730,9 @@ pub const CCtxParams = struct {
     nb_workers: i32 = 0,
     job_size: usize = 0,
     overlap_log: i32 = 0,
-    rsyncable: bool = false,
+    /// Not 0 to cut jobs where the content says; the original keeps the
+    /// value as set, up to `overlap_log_max`.
+    rsyncable: i32 = 0,
 
     ldm_params: LdmParams = .{},
 
@@ -731,11 +770,20 @@ pub const CCtxParams = struct {
     enable_match_finder_fallback: bool = false,
 
     /// The external sequence producer, set by `registerSequenceProducer`.
-    ext_seq_prod_state: ?*anyopaque = null,
-    ext_seq_prod_func: ?SequenceProducer = null,
+    ext_seq_prod: ?SequenceProducer = null,
 
     /// The repeat-code search for external sequences.
     search_for_external_repcodes: params.ParamSwitch = .auto,
+
+    const compress = @import("compress.zig");
+    pub const create = compress.createCCtxParams;
+    pub const destroy = compress.freeCCtxParams;
+    pub const init = compress.cctxParamsInit;
+    pub const initAdvanced = compress.cctxParamsInitAdvanced;
+    pub const reset = compress.cctxParamsReset;
+    pub const setParameter = compress.cctxParamsSetParameter;
+    pub const getParameter = compress.cctxParamsGetParameter;
+    pub const registerSequenceProducer = compress.cctxParamsRegisterSequenceProducer;
 };
 
 /// Whether compression goes straight from the caller's input to the
@@ -836,6 +884,47 @@ pub const CCtx = struct {
     /// The external sequence producer's output buffer.
     ext_seq_buf: ?[*]params.Sequence = null,
     ext_seq_buf_capacity: usize = 0,
+
+    const compress = @import("compress.zig");
+    pub const create = compress.createCCtx;
+    pub const initStatic = compress.initStaticCCtx;
+    pub const destroy = compress.freeCCtx;
+    pub const sizeof = compress.sizeofCCtx;
+    pub const setParameter = compress.cctxSetParameter;
+    pub const getParameter = compress.cctxGetParameter;
+    pub const setParametersUsingCCtxParams = compress.cctxSetParametersUsingCCtxParams;
+    pub const setCParams = compress.cctxSetCParams;
+    pub const setFParams = compress.cctxSetFParams;
+    pub const setParams = compress.cctxSetParams;
+    pub const setPledgedSrcSize = compress.cctxSetPledgedSrcSize;
+    pub const reset = compress.cctxReset;
+    pub const loadDictionary = compress.cctxLoadDictionary;
+    pub const loadDictionaryByReference = compress.cctxLoadDictionaryByReference;
+    pub const loadDictionaryAdvanced = compress.cctxLoadDictionaryAdvanced;
+    pub const refCDict = compress.cctxRefCDict;
+    pub const refThreadPool = compress.cctxRefThreadPool;
+    pub const refPrefix = compress.cctxRefPrefix;
+    pub const refPrefixAdvanced = compress.cctxRefPrefixAdvanced;
+    pub const registerSequenceProducer = compress.registerSequenceProducer;
+    pub const compressCCtx = compress.compressCCtx;
+    pub const compressUsingDict = compress.compressUsingDict;
+    pub const compressAdvanced = compress.compressAdvanced;
+    pub const compressUsingCDict = compress.compressUsingCDict;
+    pub const compressUsingCDictAdvanced = compress.compressUsingCDictAdvanced;
+    pub const compress2 = compress.compress2;
+    pub const compressBegin = compress.compressBegin;
+    pub const compressBeginUsingDict = compress.compressBeginUsingDict;
+    pub const compressBeginAdvanced = compress.compressBeginAdvanced;
+    pub const compressBeginUsingCDict = compress.compressBeginUsingCDict;
+    pub const compressBeginUsingCDictAdvanced = compress.compressBeginUsingCDictAdvanced;
+    pub const compressContinue = compress.compressContinue;
+    pub const compressEnd = compress.compressEnd;
+    pub const compressBlock = compress.compressBlock;
+    pub const getBlockSize = compress.getBlockSize;
+    pub const copy = compress.copyCCtx;
+    pub const generateSequences = compress.generateSequences;
+    pub const getFrameProgression = compress.getFrameProgression;
+    pub const toFlushNow = compress.toFlushNow;
 };
 
 /// `ZSTD_dictTableLoadMethod_e`.
@@ -1456,7 +1545,7 @@ pub inline fn comparePackedTags(packed_tag1: usize, packed_tag2: usize) bool {
 
 /// `ZSTD_hasExtSeqProd`: whether an external sequence producer is registered.
 pub fn hasExtSeqProd(cctx_params: *const CCtxParams) bool {
-    return cctx_params.ext_seq_prod_func != null;
+    return cctx_params.ext_seq_prod != null;
 }
 
 /// `ZSTD_SequencePosition`.

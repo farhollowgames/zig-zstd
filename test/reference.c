@@ -832,194 +832,130 @@ int reference_optEntropy(const void* sample, size_t sampleSize, unsigned seed,
     return 0;
 }
 
+/* Multithreaded compression, driven through zstdmt_compress.c's entry
+ * points as ZSTD_compressStream2 drives them. The parameters are resolved
+ * as ZSTD_CCtx_init_compressStream2 resolves them, with copies of its static
+ * helpers; the dictionary's dedicated search is assumed off. */
+#include "compress/zstdmt_compress.h"
 
-/* The lazy match finders' block test: as reference_blockTest, with the row
- * matcher's tag tables and salt, the dedicated dictionary search, and a
- * dictionary that is an earlier block compressed in the same context. The
- * tables are the caller's, zeroed; test/lazy_test.zig makes the same steps on
- * the port's side. */
-typedef struct {
-    ZSTD_compressionParameters cParams;
-    int useRow;
-    U64 hashSalt;
-    U32* hashTable;
-    U32* chainTable;
-    BYTE* tagTable;
-    /* 0 none, 1 loaded into the context, 2 attached as a dict match state,
-     * 3 compressed as an earlier block of the same context. */
-    int dictKind;
-    const void* dict;
-    size_t dictSize;
-    ZSTD_compressionParameters dictCParams;
-    int dictUseRow;
-    int dictDedicatedSearch;
-    U32* dictHashTable;
-    U32* dictChainTable;
-    BYTE* dictTagTable;
-} reference_LazySetup;
-
-typedef struct {
-    SeqDef* seqs;
-    size_t seqCapacity;
-    BYTE* lits;
-    size_t litCapacity;
-    U32 rep[3];
-    size_t nbSeq;
-    size_t nbLit;
-    U32 longLengthType;
-    U32 longLengthPos;
-    U32 nextToUpdate;
-    U32 hashSaltEntropy;
-    U32 lazySkipping;
-    U32 hashCache[ZSTD_ROW_HASH_CACHE_SIZE];
-} reference_LazyResult;
-
-static void reference_lazyResetMs(ZSTD_MatchState_t* ms, ZSTD_compressionParameters const* cParams,
-                                  int useRow, U64 hashSalt, U32* hashTable, U32* chainTable,
-                                  BYTE* tagTable)
+static ZSTD_ParamSwitch_e reference_resolveRowMatchFinderMode(ZSTD_ParamSwitch_e mode,
+                                                              const ZSTD_compressionParameters* cParams)
 {
-    memset(ms, 0, sizeof(*ms));
-    ZSTD_window_init(&ms->window);
-    ZSTD_window_clear(&ms->window);
-    ms->nextToUpdate = ms->window.dictLimit;
-    ms->hashTable = hashTable;
-    ms->chainTable = chainTable;
-    ms->cParams = *cParams;
-    if (useRow) {
-        U32 const rowLog = BOUNDED(4, cParams->searchLog, 6);
-        ms->tagTable = tagTable;
-        ms->rowHashLog = cParams->hashLog - rowLog;
-        ms->hashSalt = hashSalt;
-    }
+    if (mode != ZSTD_ps_auto) return mode;
+    mode = ZSTD_ps_disable;
+    if (!(cParams->strategy >= ZSTD_greedy && cParams->strategy <= ZSTD_lazy2)) return mode;
+    if (cParams->windowLog > 14) mode = ZSTD_ps_enable;
+    return mode;
 }
 
-/* ZSTD_loadDictionaryContent's steps for the lazy strategies' match state. */
-static void reference_loadLazyDictContent(ZSTD_MatchState_t* ms, int useRow,
-                                          const BYTE* dict, size_t dictSize)
+static ZSTD_ParamSwitch_e reference_resolveBlockSplitterMode(ZSTD_ParamSwitch_e mode,
+                                                             const ZSTD_compressionParameters* cParams)
 {
-    const BYTE* ip = dict;
-    const BYTE* const iend = dict + dictSize;
-    ZSTD_window_update(&ms->window, dict, dictSize, 0);
-    {   U32 const maxLog = MIN(MAX(ms->cParams.hashLog + 3, ms->cParams.chainLog + 1), 31);
-        U32 const maxDictSize = 1U << maxLog;
-        if (dictSize > maxDictSize) {
-            ip = iend - maxDictSize;
-            dictSize = maxDictSize;
+    if (mode != ZSTD_ps_auto) return mode;
+    return (cParams->strategy >= ZSTD_btopt && cParams->windowLog >= 17) ? ZSTD_ps_enable : ZSTD_ps_disable;
+}
+
+static ZSTD_ParamSwitch_e reference_resolveEnableLdm(ZSTD_ParamSwitch_e mode,
+                                                     const ZSTD_compressionParameters* cParams)
+{
+    if (mode != ZSTD_ps_auto) return mode;
+    return (cParams->strategy >= ZSTD_btopt && cParams->windowLog >= 27) ? ZSTD_ps_enable : ZSTD_ps_disable;
+}
+
+static ZSTD_ParamSwitch_e reference_resolveExternalRepcodeSearch(ZSTD_ParamSwitch_e value, int cLevel)
+{
+    if (value != ZSTD_ps_auto) return value;
+    return cLevel < 10 ? ZSTD_ps_disable : ZSTD_ps_enable;
+}
+
+static int reference_shouldAttachDict(const ZSTD_CDict* cdict, const ZSTD_CCtx_params* params,
+                                      U64 pledgedSrcSize)
+{
+    static const size_t attachDictSizeCutoffs[ZSTD_STRATEGY_MAX + 1] = {
+        8 KB, 8 KB, 16 KB, 32 KB, 32 KB, 32 KB, 32 KB, 32 KB, 8 KB, 8 KB };
+    size_t const cutoff = attachDictSizeCutoffs[ZSTD_getCParamsFromCDict(cdict).strategy];
+    return (pledgedSrcSize <= cutoff || pledgedSrcSize == ZSTD_CONTENTSIZE_UNKNOWN
+            || params->attachDictPref == ZSTD_dictForceAttach)
+        && params->attachDictPref != ZSTD_dictForceCopy
+        && !params->forceWindow;
+}
+
+/* `params` as ZSTD_CCtx_init_compressStream2 makes them for a frame of
+ * `pledgedSrcSize` with a dictionary of `dictSize` bytes, or `cdict`. */
+void reference_mt_resolveParams(ZSTD_CCtx_params* params, unsigned long long pledgedSrcSize,
+                                size_t dictSize, const ZSTD_CDict* cdict)
+{
+    ZSTD_CParamMode_e const mode = (cdict != NULL && reference_shouldAttachDict(cdict, params, pledgedSrcSize))
+        ? ZSTD_cpm_attachDict : ZSTD_cpm_noAttachDict;
+    params->cParams = ZSTD_getCParamsFromCCtxParams(params, pledgedSrcSize, dictSize, mode);
+    params->postBlockSplitter = reference_resolveBlockSplitterMode(params->postBlockSplitter, &params->cParams);
+    params->ldmParams.enableLdm = reference_resolveEnableLdm(params->ldmParams.enableLdm, &params->cParams);
+    params->useRowMatchFinder = reference_resolveRowMatchFinderMode(params->useRowMatchFinder, &params->cParams);
+    if (params->maxBlockSize == 0) params->maxBlockSize = ZSTD_BLOCKSIZE_MAX;
+    params->searchForExternalRepcodes = reference_resolveExternalRepcodeSearch(
+        params->searchForExternalRepcodes, params->compressionLevel);
+}
+
+ZSTDMT_CCtx* reference_mt_create(unsigned nbWorkers, ZSTD_threadPool* pool)
+{
+    return ZSTDMT_createCCtx_advanced(nbWorkers, ZSTD_defaultCMem, pool);
+}
+
+size_t reference_mt_initCStream(ZSTDMT_CCtx* mtctx, const void* dict, size_t dictSize,
+                                int dictContentType, const ZSTD_CDict* cdict,
+                                const ZSTD_CCtx_params* params, unsigned long long pledgedSrcSize)
+{
+    return ZSTDMT_initCStream_internal(mtctx, dict, dictSize, (ZSTD_dictContentType_e)dictContentType,
+                                       cdict, *params, pledgedSrcSize);
+}
+
+/* Sequence producers for the external sequence producer tests: one per
+ * mode, the same for the original and the port. */
+typedef struct {
+    int mode;
+    unsigned calls;
+} reference_ProducerState;
+
+size_t reference_sequenceProducer(void* state, ZSTD_Sequence* outSeqs, size_t outSeqsCapacity,
+                                  const void* src, size_t srcSize, const void* dict,
+                                  size_t dictSize, int compressionLevel, size_t windowSize)
+{
+    static const size_t offsets[] = { 1, 4, 64, 1000 };
+    reference_ProducerState* const s = (reference_ProducerState*)state;
+    const BYTE* const ip = (const BYTE*)src;
+    size_t nbSeqs = 0;
+    size_t pos = 0;
+    size_t litStart = 0;
+    (void)dict; (void)dictSize; (void)compressionLevel; (void)windowSize;
+    s->calls++;
+    if (s->mode == 1) return ZSTD_SEQUENCE_PRODUCER_ERROR;
+    if (s->mode == 2) return outSeqsCapacity + 1;
+    while (pos + 4 <= srcSize) {
+        size_t best = 0, bestOff = 0, i;
+        for (i = 0; i < sizeof(offsets) / sizeof(offsets[0]); i++) {
+            size_t const off = offsets[i];
+            size_t len = 0;
+            if (off > pos) break;
+            while (pos + len < srcSize && ip[pos + len] == ip[pos + len - off]) len++;
+            if (len > best) { best = len; bestOff = off; }
         }
-    }
-    ms->nextToUpdate = (U32)(ip - ms->window.base);
-    ms->loadedDictEnd = (U32)(iend - ms->window.base);
-    if (dictSize <= HASH_READ_SIZE) return;
-    switch (ms->cParams.strategy) {
-    case ZSTD_greedy:
-    case ZSTD_lazy:
-    case ZSTD_lazy2:
-        if (ms->dedicatedDictSearch) {
-            ZSTD_dedicatedDictSearch_lazy_loadDictionary(ms, iend - HASH_READ_SIZE);
-        } else if (useRow) {
-            memset(ms->tagTable, 0, (size_t)1 << ms->cParams.hashLog);
-            ZSTD_row_update(ms, iend - HASH_READ_SIZE);
+        if (best >= 4) {
+            if (nbSeqs + 2 > outSeqsCapacity) break;
+            outSeqs[nbSeqs].offset = (unsigned)bestOff;
+            outSeqs[nbSeqs].litLength = (unsigned)(pos - litStart);
+            outSeqs[nbSeqs].matchLength = (unsigned)best;
+            outSeqs[nbSeqs].rep = 0;
+            nbSeqs++;
+            pos += best;
+            litStart = pos;
         } else {
-            ZSTD_insertAndFindFirstIndex(ms, iend - HASH_READ_SIZE);
+            pos++;
         }
-        break;
-    case ZSTD_btlazy2:
-        ZSTD_updateTree(ms, iend - HASH_READ_SIZE, iend);
-        break;
-    default: assert(0);
     }
-    ms->nextToUpdate = (U32)(iend - ms->window.base);
-}
-
-/* One block as ZSTD_compress_frameChunk and ZSTD_buildSeqStore run it. */
-static size_t reference_lazyBlock(ZSTD_MatchState_t* ms, int useRow, const BYTE* src,
-                                  size_t srcSize, SeqStore_t* seqStore, U32* rep)
-{
-    U32 const maxDist = 1U << ms->cParams.windowLog;
-    size_t lastLLSize;
-    if (!ZSTD_window_update(&ms->window, src, srcSize, ms->forceNonContiguous)) {
-        ms->forceNonContiguous = 0;
-        ms->nextToUpdate = ms->window.dictLimit;
-    }
-    ZSTD_checkDictValidity(&ms->window, src + srcSize, maxDist, &ms->loadedDictEnd, &ms->dictMatchState);
-    ZSTD_window_enforceMaxDist(&ms->window, src, maxDist, &ms->loadedDictEnd, &ms->dictMatchState);
-    if (ms->nextToUpdate < ms->window.lowLimit) ms->nextToUpdate = ms->window.lowLimit;
-    {   U32 const curr = (U32)(src - ms->window.base);
-        if (curr > ms->nextToUpdate + 384)
-            ms->nextToUpdate = curr - MIN(192, (U32)(curr - ms->nextToUpdate - 384));
-    }
-    {   ZSTD_BlockCompressor_f const compressor = ZSTD_selectBlockCompressor(
-            ms->cParams.strategy, useRow ? ZSTD_ps_enable : ZSTD_ps_disable,
-            ZSTD_matchState_dictMode(ms));
-        lastLLSize = compressor(ms, seqStore, rep, src, srcSize);
-    }
-    memcpy(seqStore->lit, src + srcSize - lastLLSize, lastLLSize);
-    seqStore->lit += lastLLSize;
-    return lastLLSize;
-}
-
-size_t reference_lazyBlockTest(const reference_LazySetup* setup, const void* src, size_t srcSize,
-                               reference_LazyResult* result)
-{
-    ZSTD_MatchState_t ms;
-    ZSTD_MatchState_t dms;
-    SeqStore_t seqStore;
-    size_t lastLLSize;
-
-    reference_lazyResetMs(&ms, &setup->cParams, setup->useRow, setup->hashSalt,
-                          setup->hashTable, setup->chainTable, setup->tagTable);
-    seqStore.sequencesStart = result->seqs;
-    seqStore.sequences = result->seqs;
-    seqStore.litStart = result->lits;
-    seqStore.lit = result->lits;
-    seqStore.maxNbSeq = result->seqCapacity;
-    seqStore.maxNbLit = result->litCapacity;
-    seqStore.longLengthType = ZSTD_llt_none;
-    seqStore.longLengthPos = 0;
-    result->rep[0] = 1; result->rep[1] = 4; result->rep[2] = 8;
-
-    switch (setup->dictKind) {
-    case 1:
-        reference_loadLazyDictContent(&ms, setup->useRow, (const BYTE*)setup->dict, setup->dictSize);
-        break;
-    case 2:
-        reference_lazyResetMs(&dms, &setup->dictCParams, setup->dictUseRow, 0,
-                              setup->dictHashTable, setup->dictChainTable, setup->dictTagTable);
-        dms.dedicatedDictSearch = setup->dictDedicatedSearch;
-        reference_loadLazyDictContent(&dms, setup->dictUseRow, (const BYTE*)setup->dict,
-                                      setup->dictSize);
-        {   U32 const cdictEnd = (U32)(dms.window.nextSrc - dms.window.base);
-            if (cdictEnd - dms.window.dictLimit != 0) {
-                ms.dictMatchState = &dms;
-                if (ms.window.dictLimit < cdictEnd) {
-                    ms.window.nextSrc = ms.window.base + cdictEnd;
-                    ZSTD_window_clear(&ms.window);
-                }
-                ms.loadedDictEnd = ms.window.dictLimit;
-        }   }
-        break;
-    case 3:
-        /* The earlier block's sequences are not kept. */
-        (void)reference_lazyBlock(&ms, setup->useRow, (const BYTE*)setup->dict, setup->dictSize,
-                                  &seqStore, result->rep);
-        seqStore.sequences = seqStore.sequencesStart;
-        seqStore.lit = seqStore.litStart;
-        seqStore.longLengthType = ZSTD_llt_none;
-        seqStore.longLengthPos = 0;
-        break;
-    default: break;
-    }
-
-    lastLLSize = reference_lazyBlock(&ms, setup->useRow, (const BYTE*)src, srcSize, &seqStore,
-                                     result->rep);
-
-    result->nbSeq = (size_t)(seqStore.sequences - seqStore.sequencesStart);
-    result->nbLit = (size_t)(seqStore.lit - seqStore.litStart);
-    result->longLengthType = (U32)seqStore.longLengthType;
-    result->longLengthPos = seqStore.longLengthPos;
-    result->nextToUpdate = ms.nextToUpdate;
-    result->hashSaltEntropy = ms.hashSaltEntropy;
-    result->lazySkipping = ms.lazySkipping;
-    memcpy(result->hashCache, ms.hashCache, sizeof(ms.hashCache));
-    return lastLLSize;
+    if (nbSeqs + 1 > outSeqsCapacity) return ZSTD_SEQUENCE_PRODUCER_ERROR;
+    outSeqs[nbSeqs].offset = 0;
+    outSeqs[nbSeqs].litLength = (unsigned)(srcSize - litStart) + (s->mode == 3 ? 1 : 0);
+    outSeqs[nbSeqs].matchLength = 0;
+    outSeqs[nbSeqs].rep = 0;
+    return nbSeqs + 1;
 }
