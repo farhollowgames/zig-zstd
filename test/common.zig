@@ -102,13 +102,28 @@ pub fn expectStdDecodes(frame: []const u8, expected: []const u8) !void {
     var in: std.Io.Reader = .fixed(frame);
     var decompress: std.compress.zstd.Decompress = .init(&in, &.{}, .{
         .verify_checksum = false,
-        .window_len = 1 << 31,
+        .window_len = stdWindowLen(frame),
     });
     _ = decompress.reader.streamRemaining(&out.writer) catch |err| {
         std.debug.print("std decompress: {t} ({?t})\n", .{ err, decompress.err });
         return error.StdDecompressFailed;
     };
     try std.testing.expectEqualSlices(u8, expected, out.written());
+}
+
+/// The window std's decoder keeps for `frame`: its first frame's window, as
+/// the decoder's output buffer is at least that large, or the largest window
+/// a frame of this target can have when the header does not say.
+fn stdWindowLen(frame: []const u8) u32 {
+    const zstd_std = std.compress.zstd;
+    const window_max: u32 = if (@sizeOf(usize) > 4) 1 << 31 else 1 << 30;
+    var in: std.Io.Reader = .fixed(frame);
+    const magic = in.takeInt(u32, .little) catch return window_max;
+    if (magic != @backingInt(zstd_std.Decompress.Frame.Magic.zstandard)) return window_max;
+    const header = zstd_std.Decompress.Frame.Zstandard.Header.decode(&in) catch
+        return window_max;
+    const window = header.windowSize() orelse return window_max;
+    return @intCast(std.math.clamp(window, zstd_std.block_size_max, window_max));
 }
 
 /// `size` bytes of the original's generated test data (RDG_genBuffer).

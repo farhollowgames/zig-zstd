@@ -28,6 +28,8 @@ const gpa = common.gpa;
 const io = std.testing.io;
 const kib = 1 << 10;
 const mib = 1 << 20;
+/// An output window that reaches the end of the buffer.
+const whole_buffer = std.math.maxInt(usize);
 
 /// Runs of each case on each side; every one must give the same frame.
 const port_runs = 3;
@@ -55,7 +57,7 @@ const Script = struct {
     /// The last chunk goes with `.end`, rather than an `.end` without input.
     end_with_data: bool = false,
     /// The output space each call gets.
-    out_window: usize = 1 << 40,
+    out_window: usize = whole_buffer,
     /// After this many bytes fed, the level changes, as `ZSTD_compressStream2`
     /// passes a changed level on.
     update_at: ?usize = null,
@@ -476,7 +478,7 @@ fn runSide(side: anytype, case: *const Case, frames: [][]u8, observed: *Observed
         const part = case.input[0..after];
         while (in_pos < part.len) {
             if (scratch.len == scratch.buffer.len) scratch.len = 0;
-            _ = compressStream2(side, &scratch, 1 << 40, part, &in_pos, .@"continue");
+            _ = compressStream2(side, &scratch, whole_buffer, part, &in_pos, .@"continue");
         }
     }
     for (frames, 0..) |frame, i| {
@@ -966,7 +968,7 @@ test "zstdmt: continuing a frame being ended is refused" {
         // The end with one byte of room: the frame is ended, not flushed.
         var in_pos: usize = 0;
         results[side_index][0] = compressStream2(&side, &out, 1, &.{}, &in_pos, .end);
-        results[side_index][1] = compressStream2(&side, &out, 1 << 40, &.{}, &in_pos, .@"continue");
+        results[side_index][1] = compressStream2(&side, &out, whole_buffer, &.{}, &in_pos, .@"continue");
     }
     try std.testing.expect(results[0][0] == .size and results[0][0].size > 0);
     try std.testing.expect(results[1][0] == .size and results[1][0].size > 0);

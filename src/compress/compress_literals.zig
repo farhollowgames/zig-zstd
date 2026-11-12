@@ -73,7 +73,7 @@ fn writeSimpleHeader(dst: []u8, h_type: SymbolEncodingType, src_size: usize, fl_
 fn minLiteralsToCompress(strategy: params.Strategy, huf_repeat: huf.Repeat) usize {
     const strat: u32 = @backingInt(strategy);
     assert(strat <= 9);
-    const shift: u6 = @intCast(@min(9 - strat, 3));
+    const shift: std.math.Log2Int(usize) = @intCast(@min(9 - strat, 3));
     return if (huf_repeat == .valid) 6 else @as(usize, 8) << shift;
 }
 

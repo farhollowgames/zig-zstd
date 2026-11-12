@@ -1102,7 +1102,10 @@ pub fn rleCompressBlock(dst: []u8, src: u8, src_size: usize, last_block: u32) Er
 pub fn minGain(src_size: usize, strategy: params.Strategy) usize {
     const strat: u32 = @backingInt(strategy);
     comptime assert(@backingInt(params.Strategy.btultra) == 8);
-    const minlog: u6 = if (strat >= @backingInt(params.Strategy.btultra)) @intCast(strat - 1) else 6;
+    const minlog: std.math.Log2Int(usize) = if (strat >= @backingInt(params.Strategy.btultra))
+        @intCast(strat - 1)
+    else
+        6;
     return (src_size >> minlog) + 2;
 }
 

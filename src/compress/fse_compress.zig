@@ -586,7 +586,8 @@ pub const CState = struct {
         const symbol_tt = state.symbol_tt[symbol];
         const nb_bits_out = (symbol_tt.delta_nb_bits + (1 << 15)) >> 16;
         const value = (nb_bits_out << 16) - symbol_tt.delta_nb_bits;
-        const index = @as(isize, value >> @intCast(nb_bits_out)) + symbol_tt.delta_find_state;
+        const index = @as(isize, @intCast(value >> @intCast(nb_bits_out))) +
+            symbol_tt.delta_find_state;
         state.value = state.state_table[@intCast(index)];
         return state;
     }
@@ -595,7 +596,8 @@ pub const CState = struct {
 /// `FSE_encodeSymbol`: at most `table_log` bits; the caller flushes.
 pub inline fn encodeSymbol(bit_c: *bitstream.CStream, state: *CState, symbol: u32) void {
     const symbol_tt = state.symbol_tt[symbol];
-    const nb_bits_out: u32 = @intCast((state.value + symbol_tt.delta_nb_bits) >> 16);
+    const delta_nb_bits: isize = @intCast(symbol_tt.delta_nb_bits);
+    const nb_bits_out: u32 = @intCast((state.value + delta_nb_bits) >> 16);
     bit_c.addBits(@bitCast(state.value), nb_bits_out);
     const index = (state.value >> @intCast(nb_bits_out)) + symbol_tt.delta_find_state;
     state.value = state.state_table[@intCast(index)];

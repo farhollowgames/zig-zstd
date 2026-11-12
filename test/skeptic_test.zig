@@ -16,6 +16,7 @@ const Pair = frame.Pair;
 const stream_test = @import("stream_test.zig");
 const Stream = stream_test.Stream;
 const Call = stream_test.Call;
+const whole_buffer = stream_test.whole_buffer;
 
 const combo_params = [_]CParameter{
     .compression_level,
@@ -165,7 +166,7 @@ test "skeptic: compressStream2 with several parameters at their bounds at once" 
                 break;
             }
         }
-        if (!failed) _ = try stream.finish(null, 1 << 40);
+        if (!failed) _ = try stream.finish(null, whole_buffer);
         try std.testing.expectEqualSlices(
             u8,
             stream.upstream_out[0..stream.out_pos],

@@ -425,7 +425,10 @@ test "lazy blocks without a dictionary match the original's" {
                     set[2],
                     set[3],
                 );
-                const salt: u64 = if (set_index % 3 == 0) 0 else 0x9E3779B97F4A7C15 *% set_index;
+                const salt: u64 = if (set_index % 3 == 0)
+                    0
+                else
+                    0x9E3779B97F4A7C15 *% @as(u64, set_index);
                 expectSameBlock(.{
                     .cparams = cparams,
                     .use_row = finder.use_row,

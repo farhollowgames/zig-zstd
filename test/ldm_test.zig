@@ -90,6 +90,13 @@ test "adjustParameters, getTableSize, getMaxNbSeq match the original's" {
             const cparams_c = cparamsToC(cparams);
             c.reference_ldm_adjustParameters(&expected, &cparams_c);
             try testing.expectEqual(expected, toC(port));
+            // A table of 4 GiB or more (8-byte entries), or a window over 1 GiB,
+            // is past a 32-bit target's limits; the original's sizes wrap there.
+            const too_large = port.hash_log >= 29 or window_log > 30;
+            if (@sizeOf(usize) == 4 and too_large) {
+                cases += 1;
+                continue;
+            }
 
             const table_size = c.reference_ldm_getTableSize(&expected);
             try testing.expectEqual(table_size, ldm.getTableSize(port));

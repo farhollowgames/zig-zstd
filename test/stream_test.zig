@@ -24,6 +24,8 @@ const Result = common.Result;
 const expectSameResult = frame.expectSameResult;
 const kib = 1 << 10;
 const mib = 1 << 20;
+/// An output window that reaches the end of the buffer.
+pub const whole_buffer = std.math.maxInt(usize);
 
 /// One call of a stream: how much more input it offers, the output window
 /// it gives, and which entry point it goes through.
@@ -32,7 +34,7 @@ pub const Call = struct {
     /// More input bytes offered, from where the last call left off.
     in: usize = 0,
     /// The output window; a stable output always gets the whole buffer.
-    out: usize = 1 << 40,
+    out: usize = whole_buffer,
 
     pub const Kind = enum { stream2_continue, stream2_flush, stream2_end, stream, flush, end };
 
@@ -311,10 +313,10 @@ test "compressStream2: every level, chunks, flushes and small windows" {
     for (frame.levels) |level| {
         errdefer std.debug.print("level {d}\n", .{level});
         try pair.set(.compression_level, level);
-        try streamSimple(pair, src, 64 * kib, 0, 1 << 40, null);
+        try streamSimple(pair, src, 64 * kib, 0, whole_buffer, null);
         try streamSimple(pair, src[0..100_000], 7_777, 30_000, 5_000, null);
-        try streamSimple(pair, src[0..3000], 1, 0, 1 << 40, null);
-        try streamSimple(pair, src[0..0], 1, 0, 1 << 40, null);
+        try streamSimple(pair, src[0..3000], 1, 0, whole_buffer, null);
+        try streamSimple(pair, src[0..0], 1, 0, whole_buffer, null);
     }
 }
 
@@ -485,14 +487,14 @@ test "compressStream2: fuzzed calls, both buffer modes, parameters, dictionaries
                 const result = try stream.step(.{
                     .kind = kind,
                     .in = randomInput(random, src.len),
-                    .out = randomWindow(random, 1 << 40),
+                    .out = randomWindow(random, whole_buffer),
                 });
                 if (result == .error_code) {
                     failed = true;
                     break;
                 }
             }
-            if (!failed) failed = !try stream.finish(random, 1 << 40);
+            if (!failed) failed = !try stream.finish(random, whole_buffer);
             if (!failed and plainFormat(set)) {
                 try stream.expectFrame(dict);
             } else if (!failed) {
@@ -546,7 +548,7 @@ test "compressStream2: a pledged size, right and wrong" {
                         break;
                     }
                 }
-                if (!failed) failed = !try s.finish(null, 1 << 40);
+                if (!failed) failed = !try s.finish(null, whole_buffer);
                 if (!failed) {
                     // A frame ended by its first call takes that call's
                     // input as its size.
@@ -688,14 +690,14 @@ test "compressStream2: dictionaries, prefixes and CDicts, frames after frames" {
             c.ZSTD_CCtx_refPrefix(pair.upstream, dict.ptr, dict.len),
             pair.port.refPrefix(dict),
         );
-        try streamSimple(pair, src, 40_000, 100_000, 1 << 40, dict);
-        try streamSimple(pair, src, 40_000, 0, 1 << 40, null);
+        try streamSimple(pair, src, 40_000, 100_000, whole_buffer, dict);
+        try streamSimple(pair, src, 40_000, 0, whole_buffer, null);
         // A loaded dictionary serves every frame.
         try expectSameResult(
             c.ZSTD_CCtx_loadDictionary(pair.upstream, dict.ptr, dict.len),
             pair.port.loadDictionary(dict),
         );
-        try streamSimple(pair, src, 128 * kib, 0, 1 << 40, dict);
+        try streamSimple(pair, src, 128 * kib, 0, whole_buffer, dict);
         try streamSimple(pair, src[0..5000], 100, 0, 1000, dict);
         // A CDict, whose level wins.
         const port_cdict = try zstd.CDict.create(gpa, dict, level);
@@ -706,8 +708,8 @@ test "compressStream2: dictionaries, prefixes and CDicts, frames after frames" {
             c.ZSTD_CCtx_refCDict(pair.upstream, upstream_cdict),
             pair.port.refCDict(port_cdict),
         );
-        try streamSimple(pair, src, 64 * kib, 0, 1 << 40, dict);
-        try streamSimple(pair, src[0..20_000], 64 * kib, 0, 1 << 40, dict);
+        try streamSimple(pair, src, 64 * kib, 0, whole_buffer, dict);
+        try streamSimple(pair, src[0..20_000], 64 * kib, 0, whole_buffer, dict);
     }
 }
 
@@ -729,22 +731,22 @@ test "initCStream variants, resetCStream, compressStream2SimpleArgs" {
             const port = pair.port;
             const up = pair.upstream;
             try expectSameResult(c.ZSTD_initCStream(up, level), port.initCStream(level));
-            try streamSimple(pair, src, 30_000, 0, 1 << 40, null);
+            try streamSimple(pair, src, 30_000, 0, whole_buffer, null);
             try expectSameResult(
                 c.ZSTD_initCStream_srcSize(up, level, pss),
                 port.initCStreamSrcSize(level, pss),
             );
-            try streamSimple(pair, src, 30_000, 0, 1 << 40, null);
+            try streamSimple(pair, src, 30_000, 0, whole_buffer, null);
             try expectSameResult(
                 c.ZSTD_initCStream_usingDict(up, dict.ptr, dict.len, level),
                 port.initCStreamUsingDict(dict, level),
             );
-            try streamSimple(pair, src, 30_000, 0, 1 << 40, dict);
+            try streamSimple(pair, src, 30_000, 0, whole_buffer, dict);
             try expectSameResult(
                 c.ZSTD_initCStream_usingDict(up, null, 0, level),
                 port.initCStreamUsingDict(&.{}, level),
             );
-            try streamSimple(pair, src, 30_000, 0, 1 << 40, null);
+            try streamSimple(pair, src, 30_000, 0, whole_buffer, null);
             const level_params = zstd.getParams(level, src.len, dict.len);
             for ([_]bool{ false, true }) |content_size| {
                 var pa = level_params;
@@ -774,9 +776,8 @@ test "initCStream variants, resetCStream, compressStream2SimpleArgs" {
                         const r = try s.step(.{ .kind = .stream, .in = 30_000 });
                         if (r == .error_code) break;
                     }
-                    if (s.last.? != .error_code and try s.finish(null, 1 << 40)) try s.expectFrame(
-                        dict,
-                    );
+                    const ended = s.last.? != .error_code and try s.finish(null, whole_buffer);
+                    if (ended) try s.expectFrame(dict);
                 }
                 try expectSameResult(c.ZSTD_CCtx_reset(up, 1), port.reset(.session_only));
             }
@@ -791,7 +792,7 @@ test "initCStream variants, resetCStream, compressStream2SimpleArgs" {
                 c.ZSTD_initCStream_usingCDict(up, upstream_cdict),
                 port.initCStreamUsingCDict(port_cdict),
             );
-            try streamSimple(pair, src, 30_000, 0, 1 << 40, dict);
+            try streamSimple(pair, src, 30_000, 0, whole_buffer, dict);
             const fparams: params.FrameParameters = .{
                 .content_size_flag = pss != 0,
                 .checksum_flag = true,
@@ -809,10 +810,10 @@ test "initCStream variants, resetCStream, compressStream2SimpleArgs" {
             if (pss != src.len and pss != params.content_size_unknown) {
                 try expectSameResult(c.ZSTD_CCtx_reset(up, 1), port.reset(.session_only));
             } else {
-                try streamSimple(pair, src, 30_000, 0, 1 << 40, dict);
+                try streamSimple(pair, src, 30_000, 0, whole_buffer, dict);
             }
             try expectSameResult(c.ZSTD_resetCStream(up, pss), port.resetCStream(pss));
-            try streamSimple(pair, src, 30_000, 0, 1 << 40, dict);
+            try streamSimple(pair, src, 30_000, 0, whole_buffer, dict);
             try expectSameResult(c.ZSTD_initCStream(up, level), port.initCStream(level));
         }
     }
@@ -899,8 +900,8 @@ test "CStreamInSize, CStreamOutSize, initStaticCStream" {
         const port = zstd.CCtx.initStatic(port_ws).?;
         const pair: Pair = .{ .port = port, .upstream = up };
         try expectSameResult(c.ZSTD_initCStream(up, level), port.initCStream(level));
-        try streamSimple(pair, src, 50_000, 120_000, 1 << 40, null);
-        try streamSimple(pair, src[0..1000], 50_000, 0, 1 << 40, null);
+        try streamSimple(pair, src, 50_000, 120_000, whole_buffer, null);
+        try streamSimple(pair, src[0..1000], 50_000, 0, whole_buffer, null);
         try testing.expectEqual(c.ZSTD_sizeof_CStream(up), port.sizeof());
     }
 }
@@ -1103,7 +1104,7 @@ test "multithreading: compressStream2 with flushes, small windows, a shared pool
         {
             const pair = try mtPair(nb_workers, &.{p(.compression_level, 3)});
             defer pair.deinit();
-            try expectMtStream(pair, big, 1 * mib, 0, 1 << 40);
+            try expectMtStream(pair, big, 1 * mib, 0, whole_buffer);
             try expectMtStream(pair, big, 300 * kib, 1 * mib, 100 * kib);
             try expectMtStream(pair, big[0 .. 2 * mib], 100 * kib, 700 * kib, 1000);
         }
@@ -1131,8 +1132,8 @@ test "multithreading: compressStream2 with flushes, small windows, a shared pool
             }
             try expectMtCompress2(a, big, 2);
             try expectMtCompress2(b, big[0 .. 3 * mib], 2);
-            try expectMtStream(a, big, 1 * mib, 2 * mib, 1 << 40);
-            try expectMtStream(b, big, 1 * mib, 0, 1 << 40);
+            try expectMtStream(a, big, 1 * mib, 2 * mib, whole_buffer);
+            try expectMtStream(b, big, 1 * mib, 0, whole_buffer);
         }
     }
 }
@@ -1181,10 +1182,10 @@ test "multithreading: a level change while compressing, a context without an Io"
         defer pair.deinit();
         var m = try MtStream.init(pair, big);
         defer m.deinit();
-        try m.feed(2 * mib, 1 << 40);
+        try m.feed(2 * mib, whole_buffer);
         try pair.set(.compression_level, 9);
-        try m.feed(big.len, 1 << 40);
-        try m.drain(.end, 1 << 40);
+        try m.feed(big.len, whole_buffer);
+        try m.drain(.end, whole_buffer);
         try common.expectRoundTrip(m.port_out[0..m.port.out], big);
     }
     {

@@ -244,6 +244,10 @@ test "bit streams: seeded fuzz of fields, flushes and capacities" {
     var widths: [field_count_max]c_uint = undefined;
     var ops: [field_count_max]u8 = undefined;
     var expected: [field_count_max * 4 + 16]u8 = undefined;
+    // Each field fits in the container with the bits left over after a
+    // flush; the original's callers keep within the same room.
+    const width_max: u32 = if (@sizeOf(usize) > 4) 31 else 24;
+    const pending_max = @bitSizeOf(usize) - 1 - width_max;
     var actual: [expected.len]u8 = undefined;
 
     for (0..common.fuzz_cases) |case| {
@@ -253,7 +257,7 @@ test "bit streams: seeded fuzz of fields, flushes and capacities" {
         var pending: u32 = 0;
         var total_bits: usize = 0;
         for (0..n) |i| {
-            widths[i] = random.uintLessThan(u32, 32);
+            widths[i] = random.uintAtMost(u32, width_max);
             values[i] = random.int(usize);
             ops[i] = 0;
             if (random.boolean()) {
@@ -262,13 +266,13 @@ test "bit streams: seeded fuzz of fields, flushes and capacities" {
             }
             pending += widths[i];
             total_bits += widths[i];
-            if (pending > 32 or random.uintLessThan(u32, 4) == 0) {
+            if (pending > pending_max or random.uintLessThan(u32, 4) == 0) {
                 ops[i] |= if (fast_flushes) 4 else 2;
                 pending &= 7;
             }
         }
         // A fast flush needs room for every byte; a safe one may run out.
-        const needed = total_bits / 8 + 9;
+        const needed = total_bits / 8 + @sizeOf(usize) + 1;
         const capacity = if (fast_flushes)
             random.intRangeAtMost(usize, needed, expected.len)
         else
@@ -309,7 +313,7 @@ test "FSE: optimal table logs" {
         4096,
         65536,
         1 << 20,
-        (1 << 32) + 5,
+        if (@sizeOf(usize) > 4) (1 << 32) + 5 else std.math.maxInt(usize),
     };
     const max_symbol_values = [_]u32{ 1, 2, 3, 7, 12, 31, 35, 52, 255 };
     for (0..16) |max_table_log| {
@@ -517,8 +521,11 @@ fn expectSameFseStates(src: []const u8, ct: []const u32, n: *const Normalized, s
     defer gpa.free(extra_bits);
     var prng: Random.DefaultPrng = .init(seed);
     const random = prng.random();
+    // A symbol's bits and its extra bits go in one flush; a 32-bit
+    // container holds 7 left over, a symbol's 12 and 12 extra.
+    const extra_bits_max: u32 = if (@sizeOf(usize) > 4) 25 else 12;
     for (extra, extra_bits) |*e, *bits| {
-        bits.* = random.uintAtMost(u32, 25);
+        bits.* = random.uintAtMost(u32, extra_bits_max);
         e.* = random.int(u32) & bitstream.mask[bits.*];
     }
     const capacity_max = count * 5 + 16;
@@ -774,7 +781,7 @@ test "FSE: seeded fuzz of untrusted distribution headers" {
 // Huffman.
 
 const CTable = [huf.ctableSizeSt(255)]usize;
-const fill_celt: usize = 0x5A5A5A5A5A5A5A5A;
+const fill_celt: usize = @truncate(@as(u64, 0x5A5A5A5A5A5A5A5A));
 
 /// A workspace of `huf.workspace_size` bytes, aligned on 8, with room to
 /// misalign it.

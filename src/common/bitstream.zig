@@ -247,12 +247,12 @@ test "a written stream reads back in reverse" {
 }
 
 test "a stream too large for its buffer closes to 0" {
-    var buffer: [9]u8 = undefined;
+    var buffer: [container_bytes + 1]u8 = undefined;
     var bit_c = try CStream.init(&buffer);
-    for (0..8) |_| {
+    for (0..container_bytes) |_| {
         bit_c.addBits(0xFF, 8);
         bit_c.flushBits();
     }
     try testing.expectEqual(@as(usize, 0), bit_c.close());
-    try testing.expectError(error.DstSizeTooSmall, CStream.init(buffer[0..8]));
+    try testing.expectError(error.DstSizeTooSmall, CStream.init(buffer[0..container_bytes]));
 }

@@ -21,7 +21,8 @@ test "sequenceBound" {
     for (0..300_000) |size| {
         try testing.expectEqual(c.ZSTD_sequenceBound(size), zstd.sequenceBound(size));
     }
-    for ([_]usize{ 1 << 30, 1 << 40, std.math.maxInt(u32) }) |size| {
+    for ([_]u64{ 1 << 30, 1 << 40, std.math.maxInt(u32) }) |size_u64| {
+        const size = std.math.cast(usize, size_u64) orelse continue;
         try testing.expectEqual(c.ZSTD_sequenceBound(size), zstd.sequenceBound(size));
     }
 }
