@@ -4,6 +4,8 @@
 //! here for the decoder of compressed Huffman weights in entropy_common.zig.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const build_options = @import("build_options");
 const assert = std.debug.assert;
 const Error = @import("../error.zig").Error;
 
@@ -23,6 +25,20 @@ pub const mask = blk: {
     for (&table, 0..) |*entry, n| entry.* = (@as(u32, 1) << n) - 1;
     break :blk table;
 };
+
+/// Whether `getLowerBits` masks with BMI2's `bzhi`, as the original does
+/// when it is built for a BMI2 target with its intrinsics.
+const lower_bits_bzhi = build_options.intrinsics and builtin.cpu.arch == .x86_64 and
+    std.Target.x86.featureSetHas(builtin.cpu.features, .bmi2);
+
+/// `BIT_getLowerBits`: the low `nb_bits` bits of `value`, for `nb_bits`
+/// up to 31.
+inline fn getLowerBits(value: Container, nb_bits: u32) Container {
+    assert(nb_bits < mask.len);
+    // The compiler turns this into `bzhi`, which needs no table load.
+    if (lower_bits_bzhi) return value & ((@as(Container, 1) << @intCast(nb_bits)) - 1);
+    return value & mask[nb_bits];
+}
 
 /// `ZSTD_highbit32`: the position of the highest set bit of `value`.
 pub fn highbit32(value: u32) u32 {
@@ -55,9 +71,8 @@ pub const CStream = struct {
     /// `BIT_addBits`: adds the low `nb_bits` bits of `value`, up to 31. The
     /// caller flushes before the register overflows.
     pub inline fn addBits(bit_c: *CStream, value: Container, nb_bits: u32) void {
-        assert(nb_bits < mask.len);
         assert(nb_bits + bit_c.bit_pos < container_bits);
-        bit_c.bit_container |= (value & mask[nb_bits]) << @intCast(bit_c.bit_pos);
+        bit_c.bit_container |= getLowerBits(value, nb_bits) << @intCast(bit_c.bit_pos);
         bit_c.bit_pos += nb_bits;
     }
 

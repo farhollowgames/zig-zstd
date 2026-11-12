@@ -115,6 +115,9 @@ author's session on 11 November, during step 5.
   from 1.021 to 1.000 and levels -1 to 3 gain 0.5% to 1.6%. Added on its own after
   `seqToCodes` it measured slower: changes of 1% to 2% are the size of the swings between
   builds, so the last four changes are each measured in the final state.
+- Kept: `getLowerBits` masks with `bzhi` on BMI2 targets built with intrinsics, as
+  `BIT_getLowerBits` does. In the final state, every level but 4 0.1% to 2.4% faster
+  with it, level 4 0.6% and 1.0% slower.
 - Level 1 (fast): the search loop compiles to the same 51 instructions per two positions
   as the original's, and the function runs as many instructions; the gap is in cycles,
   not yet explained. Levels 5 to 8 (row matcher): the port runs no more instructions
