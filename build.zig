@@ -71,6 +71,10 @@ pub fn build(b: *std.Build) void {
         "Also run the oracle tests with both sides on their scalar paths (default true)",
     ) orelse true;
 
+    // The original and the corpora are built and fetched only for the
+    // oracle tests and the benchmark, and never for a package that depends
+    // on this one.
+    if (!b.isRoot()) return;
     const silesia = if (corpus) b.lazyDependency("silesia", .{}) else null;
     const canterbury = if (corpus) b.lazyDependency("canterbury", .{}) else null;
 
