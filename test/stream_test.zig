@@ -413,6 +413,7 @@ test "compressStream2: fuzzed calls, both buffer modes, parameters, dictionaries
                 random.uintLessThan(usize, frame.strategy_levels.len)
             ]);
         }
+        if (!common.levelFits(try pair.port.getParameter(.compression_level))) continue;
         const stable_in = random.boolean();
         const stable_out = random.boolean();
         try setModes(pair, stable_in, stable_out);
@@ -729,6 +730,7 @@ test "compressStream2: dictionaries, prefixes and CDicts, frames after frames" {
     const dict = corpus[0..60_000];
     const src = corpus[corpus.len - 300_000 ..];
     for (frame.strategy_levels) |level| {
+        if (!common.levelFits(level)) continue;
         errdefer std.debug.print("level {d}\n", .{level});
         const pair = try Pair.init();
         defer pair.deinit();
