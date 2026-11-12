@@ -109,6 +109,12 @@ produces the same bytes. These are the rules every file follows.
 - Where the original uses SSE2, AVX2 or NEON, the port uses `@Vector`, behind
   `build_options.intrinsics`; with it off, the port takes the original's scalar
   path. The oracle tests compare each path with the original built the same way.
+- Zig 0.17 keeps LLVM's loop vectorizer off, so a loop with a run-time length
+  stays scalar. Where upstream's C relies on the C compiler vectorizing a loop
+  (match length counting, hashing, histograms), the port writes the vectors
+  out with `@Vector`. LLVM still packs explicit vectors, small fixed arrays,
+  `inline for` bodies and field-wise operations on small structs, the last
+  only when the destination pointer is `noalias`.
 - `ZSTD_MULTITHREAD` is `build_options.multithread`.
 - Other switches are listed in `STATUS.md`, as ported or left out.
 
