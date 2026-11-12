@@ -73,6 +73,24 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
   as upstream's inline-asm `ZSTD_selectAddr` is; level 4 takes 11% less time), and the
   first skeptic's probes in `test/skeptic_test.zig` behind `-Dskeptic` (all passing). A
   second skeptic adds failing tests there, one per finding, named `skeptic: ...`.
+- The second skeptic, in progress (stopped at the save point of 11 November, 23:50):
+  - `-Doverflow-correct-frequently` (build.zig) builds the port and the original with
+    `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY`, for the oracle tests only. With it, 33 of
+    34 oracle tests pass (one-shot, streams, dictionaries, prefixes, CDicts, sizes,
+    workers, LDM, small windows; 150 fuzz cases each, `-Doracle-scalar=false`); the one
+    failure is two runs of the original disagreeing on `ZSTD_sizeof_CCtx` with workers
+    in `zstdmt: a context reused, resized, abandoned mid-frame, on a shared pool`
+    (9,167,360 against 7,337,440), the timing flake the first skeptic noted, here in an
+    existing test.
+  - Written, not yet compiled or run: `skeptic: a 2 GiB prefix with window log 31
+    overflows the dictionary's validity check` (`Window.checkDictValidity` and
+    `enforceMaxDist` add in u32 with `+` where the original wraps) and `skeptic: a thread
+    pool replaced by refThreadPool still runs the context's workers` (the documentation
+    says the pool may go once replaced; the multithreaded context keeps it), and four
+    `skeptic probe:` tests (pledged sizes near 2^64, LDM at its largest tables, size hints
+    near 2^31 with dictionaries, the smallest blocks with superblocks), to be dropped if
+    they pass.
+  - Next: run those, then the oracle tests in Debug per area, then the report.
 - `review/perf-2` (worktree `zig-zstd.wt/perf2`): the second perf pass, made from
   `review/perf-and-skeptic`. Its target is no level slower than upstream, level 3 and 4
   first. Each kept change is one commit with its pinned-core gain in the message; its
@@ -302,7 +320,7 @@ Pushing: `main` and the review branch go to
 | `ZSTD_NO_INTRINSICS`, `ZSTD_ARCH_X86_SSE2`, `ZSTD_ARCH_X86_AVX2`, `ZSTD_ARCH_ARM_NEON` | `-Dintrinsics`, the target's CPU features | oracle-tested (the `oracle` build against the reference with SIMD, `oracle-scalar` with intrinsics off on both sides; NEON only by a unit test on x86) |
 | `ZSTD_CLEVEL_DEFAULT` | `params.clevel_default` | oracle-tested (level 0 and the default level against `ZSTD_getCParams`) |
 | `ZSTDMT_NBWORKERS_MAX`, `ZSTDMT_JOBSIZE_MIN`, `ZSTDMT_JOBSIZE_MAX` | `nbworkers_max`, `jobsize_min`, `jobsize_max` in `zstdmt.zig` | ported (the original's values; the parameter bounds in `compress.zig` use them) |
-| `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY` | a build option for the tests | ported (`build_options.overflow_correct_frequently`, always off: no `-D` flag yet) |
+| `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY` | a build option for the tests | oracle-tested with `-Doverflow-correct-frequently`, which builds both sides with it (`build_options.overflow_correct_frequently`; off in every other build) |
 
 ## Left out, approved by the author
 

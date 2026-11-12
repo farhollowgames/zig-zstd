@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    public.addOptions("build_options", buildOptions(b, intrinsics, multithread));
+    public.addOptions("build_options", buildOptions(b, intrinsics, multithread, false));
 
     // Tests default to ReleaseSafe: the corpus runs take minutes in Debug, and
     // ReleaseSafe keeps every assert and overflow check on.
@@ -54,11 +54,17 @@ pub fn build(b: *std.Build) void {
         "skeptic",
         "Run the skeptic tests, which fail until their findings are fixed (default false)",
     ) orelse false;
+    const correct_often = b.option(
+        bool,
+        "overflow-correct-frequently",
+        "Oracle tests with the window's indexes corrected as early as they can be, in the " ++
+            "port and the original (ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY; default false)",
+    ) orelse false;
 
     const test_step = b.step("test", "Run unit and oracle tests");
     const check_step = b.step("check", "Compile the library and its tests without running them");
 
-    const test_mod = zstdModule(b, target, test_optimize, intrinsics, multithread);
+    const test_mod = zstdModule(b, target, test_optimize, intrinsics, multithread, false);
     const unit_tests = b.addTest(.{ .root_module = test_mod, .filters = test_filters });
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
     check_step.dependOn(&unit_tests.step);
@@ -100,7 +106,14 @@ pub fn build(b: *std.Build) void {
         options.addOptionPathDirectory("reference", b.path("reference"));
         options.addOptionPathDirectory("data", b.path("test/data"));
 
-        const port = zstdModule(b, target, test_optimize, variant.port_simd, multithread);
+        const port = zstdModule(
+            b,
+            target,
+            test_optimize,
+            variant.port_simd,
+            multithread,
+            correct_often,
+        );
         const oracle = b.addTest(.{
             .name = variant.name,
             .root_module = b.createModule(.{
@@ -116,7 +129,9 @@ pub fn build(b: *std.Build) void {
             }),
             .filters = test_filters,
         });
-        oracle.root_module.linkLibrary(referenceLibrary(b, target, variant.reference_simd));
+        oracle.root_module.linkLibrary(
+            referenceLibrary(b, target, variant.reference_simd, correct_often),
+        );
         const run = b.addRunArtifact(oracle);
         test_step.dependOn(&run.step);
         check_step.dependOn(&oracle.step);
@@ -131,25 +146,31 @@ fn zstdModule(
     optimize: std.lang.Optimize,
     intrinsics: bool,
     multithread: bool,
+    correct_often: bool,
 ) *std.Build.Module {
     const module = b.createModule(.{
         .root_source_file = b.path("src/zstd.zig"),
         .target = target,
         .optimize = optimize,
     });
-    module.addOptions("build_options", buildOptions(b, intrinsics, multithread));
+    module.addOptions("build_options", buildOptions(b, intrinsics, multithread, correct_often));
     return module;
 }
 
 /// The original's build switches that the port keeps, as compile-time options.
-fn buildOptions(b: *std.Build, intrinsics: bool, multithread: bool) *std.Build.Step.Options {
+fn buildOptions(
+    b: *std.Build,
+    intrinsics: bool,
+    multithread: bool,
+    correct_often: bool,
+) *std.Build.Step.Options {
     const options = b.addOptions();
     options.addOption(bool, "intrinsics", intrinsics);
     options.addOption(bool, "multithread", multithread);
     // ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY, off as in the original's
-    // library build; a test build that turns it on must build the original
-    // with it too.
-    options.addOption(bool, "overflow_correct_frequently", false);
+    // library build; a test build that turns it on builds the original with
+    // it too.
+    options.addOption(bool, "overflow_correct_frequently", correct_often);
     return options;
 }
 
@@ -176,13 +197,16 @@ fn addBench(
             .optimize = .fast,
             .link_libc = true,
             .imports = &.{
-                .{ .name = "zstd", .module = zstdModule(b, target, .fast, intrinsics, multithread) },
+                .{
+                    .name = "zstd",
+                    .module = zstdModule(b, target, .fast, intrinsics, multithread, false),
+                },
                 .{ .name = "upstream", .module = upstreamModule(b, target) },
                 .{ .name = "bench_options", .module = options.createModule() },
             },
         }),
     });
-    bench.root_module.linkLibrary(referenceLibrary(b, target, true));
+    bench.root_module.linkLibrary(referenceLibrary(b, target, true, false));
     const run = b.addRunArtifact(bench);
     run.addPassthruArgs();
     bench_step.dependOn(&run.step);
@@ -258,10 +282,21 @@ fn referenceLibrary(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     simd: bool,
+    correct_often: bool,
 ) *std.Build.Step.Compile {
     const glibc = target.result.isGnuLibC();
+    const base_flags: []const []const u8 = if (simd) &reference_flags else &reference_scalar_flags;
+    const flags = if (correct_often)
+        std.mem.concat(b.allocator, []const u8, &.{
+            base_flags,
+            &.{"-DZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY=1"},
+        }) catch @panic("OOM")
+    else
+        base_flags;
     const library = b.addLibrary(.{
-        .name = if (simd) "zstd_reference" else "zstd_reference_scalar",
+        .name = if (correct_often)
+            (if (simd) "zstd_reference_often" else "zstd_reference_scalar_often")
+        else if (simd) "zstd_reference" else "zstd_reference_scalar",
         .linkage = if (glibc) .dynamic else .static,
         .root_module = b.createModule(.{
             .target = target,
@@ -273,14 +308,14 @@ fn referenceLibrary(
     library.root_module.addCSourceFiles(.{
         .root = b.path("reference"),
         .files = &reference_sources,
-        .flags = if (simd) &reference_flags else &reference_scalar_flags,
+        .flags = flags,
     });
     if (simd and target.result.cpu.arch == .x86_64) {
         library.root_module.addAssemblyFile(b.path("reference/lib/decompress/huf_decompress_amd64.S"));
     }
     library.root_module.addCSourceFile(.{
         .file = b.path("test/reference.c"),
-        .flags = if (simd) &reference_flags else &reference_scalar_flags,
+        .flags = flags,
     });
     library.root_module.addIncludePath(b.path("reference/lib"));
     library.root_module.addIncludePath(b.path("reference/lib/common"));
