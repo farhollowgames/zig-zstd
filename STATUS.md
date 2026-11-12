@@ -23,6 +23,15 @@ zig build <step> -j3`, never while the scratchpad's `bench.running` exists.
 `zig build check` compiles everything; `zig build test -Dcorpus=false` skips the
 corpus runs.
 
+Work in progress is on branches, one per area, each in a worktree under
+`~/Projects/zig-zstd.wt/`: `port/entropy` (bitstream, hist, FSE, Huffman),
+`port/core` (shared types, workspace, levels, fast, dfast, literals,
+sequences, the per-block oracle driver), `port/lazy`, `port/opt`, `port/ldm`,
+and `port/frame` (zstd_compress.c up to the one-shot frame path, the
+superblock and the pre-splitter). They merge into `main` as each passes its
+tests. Still to start: the streaming half of zstd_compress.c (CDict, CStream,
+`compressStream2`, `compress2`, the sequence API), then zstdmt.
+
 Pushing: `main` and the review branch go to
 `git@github.com:farhollowgames/zig-zstd.git`, fast-forward only.
 
