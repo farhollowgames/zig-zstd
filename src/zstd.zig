@@ -21,6 +21,9 @@ pub const internal = struct {
     pub const fse_compress = @import("compress/fse_compress.zig");
     pub const hist = @import("compress/hist.zig");
     pub const huf_compress = @import("compress/huf_compress.zig");
+    pub const zstd_internal = @import("common/zstd_internal.zig");
+    pub const compress_literals = @import("compress/compress_literals.zig");
+    pub const compress_sequences = @import("compress/compress_sequences.zig");
 };
 
 test {
@@ -38,4 +41,6 @@ test {
     _ = @import("compress/fse_compress.zig");
     _ = @import("compress/hist.zig");
     _ = @import("compress/huf_compress.zig");
+    _ = @import("compress/compress_literals.zig");
+    _ = @import("compress/compress_sequences.zig");
 }

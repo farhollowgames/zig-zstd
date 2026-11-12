@@ -259,6 +259,12 @@ const LiteralsRun = struct {
         try testing.expectEqualSlices(usize, &upstream_next.ctable, &port_next.ctable);
         self.port_prev = port_next;
         self.upstream_prev = upstream_next;
+        // Only a dictionary's table, which codes every byte, stays valid
+        // from block to block; this one is checked again.
+        if (self.port_prev.repeat_mode == .valid) {
+            self.port_prev.repeat_mode = .check;
+            self.upstream_prev.repeat_mode = @backingInt(zstd.internal.huf.Repeat.check);
+        }
     }
 };
 
@@ -398,7 +404,7 @@ const SequencesRun = struct {
         port_state: anytype,
         upstream_state: anytype,
     ) !void {
-        var count = [_]u32{0} ** (zi.max_seq + 1);
+        var count: [zi.max_seq + 1]u32 = @splat(0);
         for (codes) |code| count[code] += 1;
         var max: u32 = kind.max;
         while (count[max] == 0) max -= 1;
