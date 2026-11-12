@@ -36,7 +36,9 @@ const pool = @import("common/pool.zig");
 /// `compressBlock` until the frame ends, as later blocks may match into it;
 /// a static context's workspace for the context's whole life; with
 /// `stable_in_buffer`, a stream's input buffer until its frame ends; a
-/// thread pool and an `Io` until they are replaced or the context destroyed.
+/// thread pool and an `Io` until the context is destroyed, even after
+/// another is set, as the multithreaded context made at the first frame
+/// with workers keeps the ones it was made with.
 pub const CCtx = compress_internal.CCtx;
 /// A streaming context is a compression context (`ZSTD_CStream`).
 pub const CStream = CCtx;

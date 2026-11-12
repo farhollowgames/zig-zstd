@@ -1235,8 +1235,10 @@ pub fn cctxSetIo(cctx: *CCtx, io: std.Io) void {
     cctx.io = io;
 }
 
-/// `ZSTD_CCtx_refThreadPool`: the pool multithreaded compressions run on;
-/// it must stay valid until it is replaced or the context destroyed.
+/// `ZSTD_CCtx_refThreadPool`: the pool multithreaded compressions run on.
+/// It must stay valid until the context is destroyed, even after another
+/// is set: the multithreaded context, made at the first frame with
+/// workers, keeps the pool it was made with.
 pub fn cctxRefThreadPool(cctx: *CCtx, pool: ?*ci.ThreadPool) Error!void {
     if (cctx.stream_stage != .init) return error.StageWrong;
     cctx.pool = pool;

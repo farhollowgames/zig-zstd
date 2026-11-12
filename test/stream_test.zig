@@ -1137,6 +1137,40 @@ test "multithreading: compressStream2 with flushes, small windows, a shared pool
     }
 }
 
+// The multithreaded context is made at the first frame with workers, on the
+// pool set then, and keeps it: a pool set later is not used, on either side,
+// so the first pool must stay valid until the context is destroyed.
+test "multithreading: a pool set after the first frame with workers is not used" {
+    if (@typeInfo(zstd.internal.zstdmt.ZstdmtCCtx) == .@"opaque") return error.SkipZigTest;
+    const src = try common.generated(3 * mib, 0.6, 0.3, 77);
+    defer gpa.free(src);
+    const port_pools = [_]*zstd.ThreadPool{
+        zstd.createThreadPool(gpa, io, 2) orelse return error.OutOfMemory,
+        zstd.createThreadPool(gpa, io, 3) orelse return error.OutOfMemory,
+    };
+    defer for (port_pools) |pool| zstd.freeThreadPool(pool);
+    const upstream_pools = [_]*c.ZSTD_threadPool{
+        c.ZSTD_createThreadPool(2) orelse return error.OutOfMemory,
+        c.ZSTD_createThreadPool(3) orelse return error.OutOfMemory,
+    };
+    defer for (upstream_pools) |pool| c.ZSTD_freeThreadPool(pool);
+    const pair = try Pair.init();
+    defer pair.deinit();
+    try pair.set(.nb_workers, 2);
+    try expectSameResult(
+        c.ZSTD_CCtx_refThreadPool(pair.upstream, upstream_pools[0]),
+        pair.port.refThreadPool(port_pools[0]),
+    );
+    try expectMtCompress2(pair, src, 1);
+    try expectSameResult(
+        c.ZSTD_CCtx_refThreadPool(pair.upstream, upstream_pools[1]),
+        pair.port.refThreadPool(port_pools[1]),
+    );
+    try expectMtCompress2(pair, src, 1);
+    try testing.expectEqual(upstream_pools[0], c.reference_mtFactory(pair.upstream).?);
+    try testing.expectEqual(port_pools[0], pair.port.mtctx.?.factory.?);
+}
+
 test "multithreading: a level change while compressing, a context without an Io" {
     if (@typeInfo(zstd.internal.zstdmt.ZstdmtCCtx) == .@"opaque") return error.SkipZigTest;
     const big = try mtInput();

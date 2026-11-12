@@ -135,6 +135,15 @@ void reference_appliedCParams(const ZSTD_CCtx* cctx, ZSTD_compressionParameters*
     *cParams = cctx->appliedParams.cParams;
 }
 
+/* The thread pool a context's workers run on, or NULL before its first frame
+ * with workers. The pool is the first field of ZSTDMT_CCtx_s, which only
+ * compress/zstdmt_compress.c declares. */
+const void* reference_mtFactory(const ZSTD_CCtx* cctx)
+{
+    if (cctx->mtctx == NULL) return NULL;
+    return *(const void* const*)(const void*)cctx->mtctx;
+}
+
 /* The bit stream writer and the FSE symbol encoder are inline functions in
  * bitstream.h and fse.h, so the tests reach them through these. */
 #define FSE_STATIC_LINKING_ONLY

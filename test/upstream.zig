@@ -214,6 +214,10 @@ pub extern fn reference_appliedCParams(
     cctx: *const ZSTD_CCtx,
     cparams: *ZSTD_compressionParameters,
 ) void;
+
+/// The thread pool `cctx`'s workers run on, null before its first frame
+/// with workers.
+pub extern fn reference_mtFactory(cctx: *const ZSTD_CCtx) ?*ZSTD_threadPool;
 // The entropy coders' internal functions, exported by the library, and the
 // helpers in test/reference.c that reach their inline parts.
 

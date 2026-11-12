@@ -1,9 +1,7 @@
 //! The skeptic's probes: parameter sets with several values at or next to
 //! their bounds at once, in one-shot, streaming, dictionary and worker
 //! compression, each frame compared byte for byte with the original's.
-//! Run with `-Dskeptic`. The combination probes at the top pass on the
-//! current code; each `skeptic: ...` test after them shows one finding and
-//! fails, or panics, until it is fixed.
+//! Run with `-Dskeptic`.
 
 const std = @import("std");
 const zstd = @import("zstd");
@@ -318,59 +316,4 @@ test "skeptic: compress2 with the full window, hash and chain bounds at once" {
         _ = try pair.compress2(src, c.ZSTD_compressBound(size));
         try std.testing.expectEqual(c.ZSTD_sizeof_CCtx(pair.upstream), pair.port.sizeof());
     }
-}
-
-// The findings: each test below fails, or panics, until its finding is fixed.
-
-/// Streams `src` on both sides with `.flush` and then `.end`, so the size
-/// stays unknown, and compares every result and the frames.
-fn expectSameFlushedStream(pair: Pair, src: []const u8) !void {
-    const capacity = c.ZSTD_compressBound(src.len) + 64;
-    const expected = try gpa.alloc(u8, capacity);
-    defer gpa.free(expected);
-    const actual = try gpa.alloc(u8, capacity);
-    defer gpa.free(actual);
-    var upstream_out: c.ZSTD_outBuffer = .{ .dst = expected.ptr, .size = capacity, .pos = 0 };
-    var upstream_in: c.ZSTD_inBuffer = .{ .src = src.ptr, .size = src.len, .pos = 0 };
-    var port_out: zstd.OutBuffer = .{ .dst = actual };
-    var port_in: zstd.InBuffer = .{ .src = src };
-    for ([_]zstd.EndDirective{ .flush, .end }) |op| {
-        const code = c.ZSTD_compressStream2(
-            pair.upstream,
-            &upstream_out,
-            &upstream_in,
-            @backingInt(op),
-        );
-        try frame.expectSameResult(code, pair.port.compressStream2(&port_out, &port_in, op));
-        try std.testing.expectEqual(upstream_in.pos, port_in.pos);
-        try std.testing.expectEqual(upstream_out.pos, port_out.pos);
-    }
-    try common.expectSameFrame(expected[0..upstream_out.pos], actual[0..port_out.pos]);
-}
-
-// `CCtx.refThreadPool` says the pool "must stay valid until it is replaced"
-// (and zstd.zig's `CCtx` doc says the same of the pool and the `Io`), but the
-// multithreaded context made at the first frame with workers keeps the pool
-// it was made with: after `refThreadPool(other)`, the workers still run on
-// the first pool, so freeing it as documented is a use after free. The
-// original behaves the same; the documentation is what is wrong.
-test "skeptic: a thread pool replaced by refThreadPool still runs the context's workers" {
-    if (@typeInfo(zstd.internal.zstdmt.ZstdmtCCtx) == .@"opaque") return error.SkipZigTest;
-    const io = std.testing.io;
-    const first = zstd.createThreadPool(gpa, io, 2) orelse return error.OutOfMemory;
-    defer zstd.freeThreadPool(first);
-    const second = zstd.createThreadPool(gpa, io, 2) orelse return error.OutOfMemory;
-    defer zstd.freeThreadPool(second);
-    const cctx = try zstd.CCtx.create(gpa);
-    defer cctx.destroy() catch unreachable;
-    try cctx.refThreadPool(first);
-    _ = try cctx.setParameter(.nb_workers, 2);
-    const src = try common.generated(3 << 20, 0.6, 0.3, 77);
-    defer gpa.free(src);
-    const dst = try gpa.alloc(u8, c.ZSTD_compressBound(src.len));
-    defer gpa.free(dst);
-    _ = try cctx.compress2(dst, src);
-    try cctx.refThreadPool(second);
-    _ = try cctx.compress2(dst, src);
-    try std.testing.expect(cctx.mtctx.?.factory.? == second);
 }

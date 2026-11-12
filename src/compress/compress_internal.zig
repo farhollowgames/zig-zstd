@@ -830,7 +830,9 @@ pub const CCtx = struct {
     xxh_state: std.hash.XxHash64 = .init(0),
     /// The context's allocator; null for a static context.
     custom_mem: ?std.mem.Allocator = null,
-    /// A thread pool the caller owns, valid until it is unset.
+    /// A thread pool the caller owns, valid until the context is destroyed:
+    /// the multithreaded context keeps the one it was made with, even after
+    /// another is set.
     pool: ?*ThreadPool = null,
     /// The `Io` whose locks multithreaded compression takes (`setIo`):
     /// the multithreaded context is made on it, or on the thread pool's
