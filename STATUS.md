@@ -74,29 +74,36 @@ author's session on 11 November, during step 5.
 - `port/*`: the merged porting branches, kept for history.
 
 **The second performance pass** (`review/perf-2`, worktree `zig-zstd.wt/perf2`), as of
-23:50 on 11 November:
+00:20 on 12 November:
 - Profiling works: `perf record -e cycles:u` (user-mode events pass `perf_event_paranoid`
   2; only kernel events are blocked). In a profile of the bench, `bench` is the port and
   `libzstd_reference.so` the original, so `perf report --sort dso,sym` compares them
   function by function. Sample with `-c 1000000`; pin with `taskset -c 6` under the lock.
+  Instruction counts (`instructions:u`) do not depend on load, so instruction profiles
+  can run without the lock; cycle profiles need it.
 - Level 3 before this pass: the dfast block compressor took 40.9% of the cycles against
   the original's 37.6%, and ran 32% more instructions (37.8% of all instructions against
   28.6%). The inner search loops cost the same; the match path (count, storeSeq, table
   inserts, repeat offsets) cost about 30% more. The entropy stages are even.
-- Found: `std.mem.swap` in Zig 0.17 swaps byte by byte, so the repeat offsets it swaps
-  are split into four bytes for the whole function (shifts, `movzbl`, `or` on every
-  match). Work in progress, committed untested: fast and dfast (all dictionary modes)
-  and the Huffman sort swap through a temporary, as the original does. Quick pinned run
-  (5 runs, port s and port / original, before and after): level 3 0.497 s (1.078) to
-  0.477 s (1.031); level 4 0.074 s (1.098) to 0.072 s (1.058); level 1 unchanged, 0.289 s
-  (1.058). Still to do for it: `zb.sh <wt> test -Dcorpus=false -Dtest-filter=fast`
-  (and `double`, `huf`), then a commit noting the tests.
-- Next: the dfast noDict loop as one labeled switch with named `continue` targets (the
-  `found`/`next` dispatch compiles to `jmp *(table)` jump tables); the patch is in the
-  scratchpad as `zstd/perf2/dfast-restructure.patch`, untested. Then the repeat-offset
-  test as a non-short-circuit `&`, as the original's; then level 1 (fast: profile first,
-  the swap did not move it), then levels 5 to 8 (row matcher). `std.mem.copyForwards` in
-  `zstdmt.zig` is a byte loop (the original uses memmove); check before the MT rows.
+- Kept: the repeat offsets swap through a temporary (fast and dfast, every dictionary
+  mode) and the Huffman sort swaps nodes the same way. `std.mem.swap` in Zig 0.17 swaps
+  byte by byte, which split the offsets into bytes for the whole function. Level 3 1.078
+  to 1.031, level 4 1.098 to 1.058 (pinned, 5 runs); level 1 unchanged at 1.058. The
+  fast, dfast, Huffman and compressCCtx oracle tests pass (49 of 49).
+- Kept: the dfast noDict loop is one labeled switch whose `continue`s name their targets.
+  The search loop left with the next step as a value, and the dispatch on it compiled to
+  jump tables (23 indirect jumps) with the live values on the stack. Level 3 1.038 to
+  1.006 and 0.999 (two passes), level 4 1.057 to 1.041.
+- Level 1 (fast): the search loop compiles to the same 51 instructions per two positions
+  as the original's, and the function runs as many instructions; the gap is in cycles,
+  not yet explained. Levels 5 to 8 (row matcher): the port runs no more instructions
+  than the original over the whole level; the row search is the same code.
+- `encodeSequences` masks with a table load where the original uses BMI2 `bzhi`
+  (`BIT_getLowerBits`): 5% to 6% more instructions there, and it is a sixth of the work
+  at level 4. Next: `getLowerBits` with `bzhi`, measured at levels 1, 3 and 4; then the
+  repeat-offset test as a non-short-circuit `&` in dfast, as the original's.
+  `std.mem.copyForwards` in `zstdmt.zig` is a byte loop (the original uses memmove);
+  check before the MT rows.
 - At the end: set `port_multithread_merged = true` in bench/bench.zig if the MT rows run,
   and replace the table in `doc/BENCHMARKS.md` from one full pinned `--runs 5` run.
 
