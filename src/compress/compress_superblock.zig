@@ -197,6 +197,9 @@ fn compressSubBlockSequences(
         dst[seq_head] = (@as(u8, @backingInt(fse_metadata.ll_type)) << 6) +
             (@as(u8, @backingInt(fse_metadata.of_type)) << 4) +
             (@as(u8, @backingInt(fse_metadata.ml_type)) << 2);
+        // The original copies the tables without checking the room left,
+        // and writes past `dst` when they do not fit.
+        if (fse_metadata.fse_tables_size > dst.len - op) return error.DstSizeTooSmall;
         @memcpy(
             dst[op..][0..fse_metadata.fse_tables_size],
             fse_metadata.fse_tables_buffer[0..fse_metadata.fse_tables_size],

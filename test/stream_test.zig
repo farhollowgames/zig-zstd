@@ -372,6 +372,13 @@ fn setParams(pair: Pair, set: []const common.Param) !void {
     for (set) |param| try pair.set(portParam(param.param), param.value);
 }
 
+/// Whether `set` gives a target block size, so blocks are split into
+/// sub-blocks.
+fn hasTargetCBlockSize(set: []const common.Param) bool {
+    for (set) |param| if (param.param == 130) return true;
+    return false;
+}
+
 /// Whether frames with `set` decode without telling the decoder.
 fn plainFormat(set: []const common.Param) bool {
     for (set) |param| if (param.param == 10 and param.value == 1) return false;
@@ -469,9 +476,16 @@ test "compressStream2: fuzzed calls, both buffer modes, parameters, dictionaries
                 else => {},
             }
 
-            // A stable output buffer, now and then too small.
-            const capacity = if (stable_out and random.uintLessThan(u32, 8) == 0)
+            // A stable output buffer, now and then too small. With a target
+            // block size the original writes a sub-block's entropy tables
+            // past the end of a stable output too small for them, so it
+            // gets room there.
+            const small: ?usize = if (stable_out and random.uintLessThan(u32, 8) == 0)
                 1 + random.uintLessThan(usize, 1000)
+            else
+                null;
+            const capacity = if (small != null and !hasTargetCBlockSize(set))
+                small.?
             else
                 c.ZSTD_compressBound(src.len) + 64;
             var stream = try Stream.init(pair, src, capacity, stable_in, stable_out);
@@ -511,6 +525,10 @@ test "compressStream2: fuzzed calls, both buffer modes, parameters, dictionaries
                     c.ZSTD_CCtx_reset(pair.upstream, 1),
                     pair.port.reset(.session_only),
                 );
+                // A reset keeps the count of stable input not yet taken, and
+                // the original's next frame steps back past its input by
+                // that much; the case ends here.
+                if (pair.port.stable_in_not_consumed != 0) break;
             }
         }
     }

@@ -30,7 +30,12 @@ Decompression is left to Zig's standard library (`std.compress.zstd`).
   wraps there, and it returns a context that crashes on first use.
 - **Unchecked writes.** Where the original goes on past a failure the port
   returns the error: `copyCCtx` when resetting the copy fails (the original
-  then copies into tables it has not reserved).
+  then copies into tables it has not reserved), and a sub-block of a
+  `targetCBlockSize` block whose entropy tables do not fit the room left
+  (the original copies them past the end of its output, which happens with
+  a small stable output buffer). The port's sub-block fails with
+  `error.DstSizeTooSmall`, and the block falls back to a raw block, as the
+  original's does for a sub-block that does not fit.
 - **Workers.** Workers need an `std.Io`: `CCtx.setIo`, or the one of a pool
   given with `refThreadPool`. A context with workers and neither refuses
   with `error.ParameterCombinationUnsupported`.

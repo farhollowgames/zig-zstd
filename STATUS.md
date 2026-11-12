@@ -175,6 +175,16 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
       `uintLessThan(usize, ...)`, so the cases differ between targets. `compressStream:
       a stable input's size hint after a smaller frame` makes the case on both
       targets, and `expectSameResult` says why it takes the raw value.
+    - Found once the crashes above no longer hid it: in `compressStream2: fuzzed
+      calls, ...` on 32-bit, a sub-block of a `targetCBlockSize` block copied its
+      entropy tables into 5 bytes of room (the port's index check panicked). The
+      original copies them without checking and writes past the stable output
+      buffer: with the port fixed, it corrupted the harness's allocator. **Fixed**:
+      the port's sub-block returns `error.DstSizeTooSmall` there and the block falls
+      back to a raw block (`doc/parity.md`); the fuzzer gives a stable output too
+      small only to sets without a target block size, drawing the same numbers, and
+      ends a case after a failed frame that leaves stable input held back, the
+      reset's known gap (open points below).
   - The benchmark: the original is a shared library built without upstream's own
     `-fvisibility=hidden` (`reference/lib/Makefile:147`), so 460 call sites into its
     own functions (`HIST_countFast_wksp`, `FSE_buildCTable_wksp`, `HUF_buildCTable_wksp`,
