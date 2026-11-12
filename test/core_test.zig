@@ -21,7 +21,7 @@ const CompressionParameters = params.CompressionParameters;
 const gpa = common.gpa;
 const testing = std.testing;
 
-fn toC(p: CompressionParameters) c.ZSTD_compressionParameters {
+pub fn toC(p: CompressionParameters) c.ZSTD_compressionParameters {
     return .{
         .window_log = p.window_log,
         .chain_log = p.chain_log,
@@ -33,7 +33,7 @@ fn toC(p: CompressionParameters) c.ZSTD_compressionParameters {
     };
 }
 
-fn fromC(p: c.ZSTD_compressionParameters) CompressionParameters {
+pub fn fromC(p: c.ZSTD_compressionParameters) CompressionParameters {
     return .{
         .window_log = p.window_log,
         .chain_log = p.chain_log,
@@ -201,10 +201,10 @@ fn zeroed(log: u32) ![]u32 {
 
 /// Inputs for the block tests: the original's golden inputs (their first
 /// 128 KiB), generated data of several kinds, and hand-made edge cases.
-const Inputs = struct {
+pub const Inputs = struct {
     list: std.ArrayList([]u8) = .empty,
 
-    fn deinit(self: *Inputs) void {
+    pub fn deinit(self: *Inputs) void {
         for (self.list.items) |input| gpa.free(input);
         self.list.deinit(gpa);
     }
@@ -214,7 +214,7 @@ const Inputs = struct {
         try self.list.append(gpa, input);
     }
 
-    fn standard() !Inputs {
+    pub fn standard() !Inputs {
         var self: Inputs = .{};
         errdefer self.deinit();
         for ([_][]const u8{
@@ -282,7 +282,7 @@ fn dfastParams(window_log: u32, hash_log: u32, chain_log: u32, min_match: u32) C
 }
 
 /// The smallest window log that holds `size` bytes, at least the minimum.
-fn windowLogFor(size: usize) u32 {
+pub fn windowLogFor(size: usize) u32 {
     var log: u32 = params.window_log_min;
     while ((@as(usize, 1) << @intCast(log)) < size) log += 1;
     return log;
@@ -424,7 +424,9 @@ test "fuzz: fast and dfast blocks match the original's" {
 /// The port's sequences of one block in `ZSTD_generateSequences`' form, as
 /// `ZSTD_copyBlockSequences` makes them: offsets resolved from repeat codes,
 /// then a delimiter with the last literals.
-fn generatedSequences(block: *const ci.BlockTest) ![]c.ZSTD_Sequence {
+/// `block` is a `ci.BlockTest`, or another driver with its `storedSequences`,
+/// `storedLiterals` and `seq_store`.
+pub fn generatedSequences(block: anytype) ![]c.ZSTD_Sequence {
     const in_seqs = block.storedSequences();
     const out = try gpa.alloc(c.ZSTD_Sequence, in_seqs.len + 1);
     var repcodes: ci.Repcodes = .{ .rep = .{ 1, 4, 8 } };
