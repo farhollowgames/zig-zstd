@@ -74,7 +74,7 @@ author's session on 11 November, during step 5.
 - `port/*`: the merged porting branches, kept for history.
 
 **The second performance pass** (`review/perf-2`, worktree `zig-zstd.wt/perf2`), as of
-02:00 on 12 November:
+03:40 on 12 November:
 - Profiling works: `perf record -e cycles:u` (user-mode events pass `perf_event_paranoid`
   2; only kernel events are blocked). In a profile of the bench, `bench` is the port and
   `libzstd_reference.so` the original, so `perf report --sort dso,sym` compares them
@@ -106,6 +106,10 @@ author's session on 11 November, during step 5.
   off: level 1 1.04, level 3 1.015, levels 4 to 8 0.99 to 1.01. Time only while core 6
   and its sibling 22 are idle: other sessions' test runs share the machine, and a busy
   sibling inflates a run by half.
+- Kept: `seqToCodes` keeps the three code tables in locals, as the original does: a code
+  byte stored through the store's pointers made the loop read them again after every byte.
+  Levels -5 to 3 0.5% to 1.2% faster (level 2 1.020 to 1.008); from level 4 within the
+  passes' spread.
 - Level 1 (fast): the search loop compiles to the same 51 instructions per two positions
   as the original's, and the function runs as many instructions; the gap is in cycles,
   not yet explained. Levels 5 to 8 (row matcher): the port runs no more instructions
