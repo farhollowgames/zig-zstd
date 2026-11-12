@@ -831,8 +831,10 @@ test "initStatic: workspaces of the estimated size, and one byte less" {
     const dst = try frame.boundBuffer(src.len);
     defer gpa.free(dst);
     for (frame.strategy_levels ++ [_]i32{ -131072, 2, 22 }) |level| {
+        if (!common.levelFits(level)) continue;
         const estimate = zstd.estimateCCtxSize(level);
         for ([_]usize{ estimate, estimate - 1 }) |size| {
+            errdefer std.debug.print("level {d}, workspace {d}\n", .{ level, size });
             const pair = try StaticPair.init(size, 0);
             defer pair.deinit();
             try testing.expect(pair.port != null);

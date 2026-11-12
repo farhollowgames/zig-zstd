@@ -22,6 +22,14 @@ pub fn fuzzSeed(base: u64) u64 {
 /// The number of cases a fuzz test runs (`-Dfuzz-cases`, default 1000).
 pub const fuzz_cases = test_options.fuzz_cases;
 
+/// Whether a test may hold several contexts of `level` with no size known,
+/// on both sides: levels 20 to 22 take 400 to 900 MB a context, which a
+/// 32-bit process cannot place reliably once a long run has fragmented its
+/// address space.
+pub fn levelFits(level: i32) bool {
+    return @sizeOf(usize) > 4 or level < 20;
+}
+
 /// The original's result: a size, or its error code.
 pub const Result = union(enum) {
     size: usize,

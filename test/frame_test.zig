@@ -303,6 +303,7 @@ test "compressBegin, compressContinue, compressEnd: odd chunks, known and unknow
     const dst = try boundBuffer(src.len);
     defer gpa.free(dst);
     for (strategy_levels) |level| {
+        if (!common.levelFits(level)) continue;
         for (0..3) |mode| {
             // 0: compressBegin, the size unknown; 1: compressBegin_advanced
             // with the size pledged; 2: with a checksum, the size unknown.
@@ -418,6 +419,7 @@ test "compressBlock: blocks of a frame body, and copyCCtx" {
     const dst = try boundBuffer(src.len);
     defer gpa.free(dst);
     for (strategy_levels) |level| {
+        if (!common.levelFits(level)) continue;
         try expectSameResult(
             c.ZSTD_compressBegin(pair.upstream, level),
             pair.port.compressBegin(level),

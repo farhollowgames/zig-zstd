@@ -2353,15 +2353,9 @@ fn copyCCtxInternal(
         cctx_params.ldm_params = src_cctx.applied_params.ldm_params;
         cctx_params.fparams = fparams;
         cctx_params.max_block_size = src_cctx.applied_params.max_block_size;
-        // The original carries on when this reset fails.
-        resetCCtxInternal(
-            dst_cctx,
-            &cctx_params,
-            pledged_src_size,
-            0,
-            .leave_dirty,
-            zbuff,
-        ) catch {};
+        // The original carries on when this reset fails, and copies into
+        // tables it has not reserved; the port returns the error.
+        try resetCCtxInternal(dst_cctx, &cctx_params, pledged_src_size, 0, .leave_dirty, zbuff);
         assert(
             dst_cctx.applied_params.cparams.window_log ==
                 src_cctx.applied_params.cparams.window_log,

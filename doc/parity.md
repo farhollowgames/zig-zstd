@@ -28,6 +28,9 @@ Decompression is left to Zig's standard library (`std.compress.zstd`).
   and making the multithreaded context. `initStatic` over a workspace a few
   bytes larger than the context returns null; the original's space check
   wraps there, and it returns a context that crashes on first use.
+- **Unchecked writes.** Where the original goes on past a failure the port
+  returns the error: `copyCCtx` when resetting the copy fails (the original
+  then copies into tables it has not reserved).
 - **Workers.** Workers need an `std.Io`: `CCtx.setIo`, or the one of a pool
   given with `refThreadPool`. A context with workers and neither refuses
   with `error.ParameterCombinationUnsupported`.

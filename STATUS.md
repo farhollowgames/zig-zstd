@@ -151,7 +151,19 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
       32-bit address space are refused`, port only), noted in `doc/parity.md`.
     - `initStatic: workspaces of the estimated size, and one byte less` fails an
       `expect` with no output (likely a workspace of the level-22 estimate that a
-      32-bit process cannot allocate twice); not yet looked into.
+      32-bit process cannot allocate twice). **Fixed**: the address space. It passes
+      on its own and in a run where it gets a fresh process; once the earlier crashes
+      were fixed, the long-running test process ran out of room for contexts of levels
+      20 to 22 (400 to 900 MB each, two to four at a time): its `StaticPair.init`
+      failed with `OutOfMemory` through `try`, which prints nothing, two frame tests
+      got the port's memory allocation error where the original had just taken the
+      room, `compressBlock: blocks of a frame body, and copyCCtx` crashed in the
+      port's table copy, and `compressStream2: every level, chunks, flushes and small
+      windows` looped for 30 minutes (both sides failing, the loop never ending).
+      Those four tests skip levels 20 to 22 on 32-bit (`common.levelFits`), the
+      stream loop stops on an error, and the initStatic test names its level and
+      size when it fails. `copyCCtx` returns its reset's error where the original
+      carries on into tables it has not reserved (`doc/parity.md`).
     - `compressStream2: fuzzed calls ...` (seed 984, case 479) gave the same raw value
       on both sides, 2^32 - 113, in the original's error range; the harness now takes
       that as the same, but why the hint wraps on 32-bit only is not yet known.

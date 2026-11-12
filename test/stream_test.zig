@@ -291,7 +291,8 @@ fn streamSimple(
     var since_flush: usize = 0;
     while (s.in_pos < src.len) {
         const before = s.in_pos;
-        _ = try s.step(.{ .kind = .stream2_continue, .in = chunk, .out = out });
+        const result = try s.step(.{ .kind = .stream2_continue, .in = chunk, .out = out });
+        if (result == .error_code) return error.StreamFailed;
         since_flush += s.in_pos - before;
         if (flush_every != 0 and since_flush >= flush_every) {
             since_flush = 0;
@@ -311,6 +312,7 @@ test "compressStream2: every level, chunks, flushes and small windows" {
     const src = try common.generated(400_000, 0.6, 0.3, 501);
     defer gpa.free(src);
     for (frame.levels) |level| {
+        if (!common.levelFits(level)) continue;
         errdefer std.debug.print("level {d}\n", .{level});
         try pair.set(.compression_level, level);
         try streamSimple(pair, src, 64 * kib, 0, whole_buffer, null);
