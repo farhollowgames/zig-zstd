@@ -608,7 +608,7 @@ inline fn insertBtAndGetAllMatches(
         const last_r = rep_num + ll0;
         var rep_code = ll0;
         while (rep_code < last_r) : (rep_code += 1) {
-            const rep_offset = if (rep_code == rep_num) rep[0] - 1 else rep[rep_code];
+            const rep_offset = if (rep_code == rep_num) rep[0] -% 1 else rep[rep_code];
             const rep_index = curr -% rep_offset;
             var rep_len: u32 = 0;
             assert(curr >= dict_limit);
