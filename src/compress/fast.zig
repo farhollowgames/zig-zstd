@@ -231,7 +231,8 @@ inline fn compressBlockFastNoDictGeneric(
                 current0 = @intCast(@intFromPtr(ip0) - @intFromPtr(base));
                 hash_table[hash0] = current0;
 
-                if (std.mem.readInt(u32, ip2[0..4], native_endian) == rval and rep_offset1 > 0) {
+                // Both tests are made, with no branch between them.
+                if ((std.mem.readInt(u32, ip2[0..4], native_endian) == rval) & (rep_offset1 > 0)) {
                     ip0 = ip2;
                     match0 = ip0 - rep_offset1;
                     m_length = @intFromBool((ip0 - 1)[0] == (match0 - 1)[0]);
