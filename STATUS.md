@@ -80,13 +80,17 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
     dictionary's end in u32 with `+`, where the original's sums wrap. Any dictionary,
     prefix or CDict whose end index reaches 2^31 with window log 31 gets there; the
     dictMatchState assert in `double_fast.zig` (`dict_limit + (1 << window_log)`) is the
-    same sum. Fix: `+%`, as `canOverflowCorrect` has.
+    same sum. **Fixed** in `46975b9`: the sums wrap (`+%`); no other u32 index sum in
+    the window, the LDM or the finders has the pattern. The test is now `refPrefix: a
+    2 GiB prefix with window log 31` in the normal suite (a read-only mapping of zero
+    pages: a few MB, a few milliseconds).
   - `skeptic: a thread pool replaced by refThreadPool still runs the context's workers`
     fails: the multithreaded context keeps the pool and the `Io` it was made with, so
     the docs of `refThreadPool`, of the `pool` field and of `CCtx` in `zstd.zig` ("until
-    they are replaced") promise what neither the port nor the original does. Fix the
-    docs (valid until the context is destroyed), or drop the multithreaded context when
-    the pool or the `Io` changes.
+    they are replaced") promise what neither the port nor the original does. **Fixed**
+    in `30528a0`: the docs say valid until the context is destroyed, and `multithreading:
+    a pool set after the first frame with workers is not used` checks that both sides
+    keep the first pool (the original's through `reference_mtFactory`).
   - Docs: `copyCCtx` does not say that the copy refers to what the source's window
     refers to (a `compressBeginUsingDict` dictionary, a CDict's content) until its frame
     ends, and `zstd.zig`'s list of references misses it.
