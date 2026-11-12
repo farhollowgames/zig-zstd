@@ -124,8 +124,8 @@ Two limits of std's decoder (Zig 0.17.0) shape the round trips:
 
 ### Tests and counts
 
-`zig build test` runs 306 tests in about 25 minutes on the machine in
-[`BENCHMARKS.md`](BENCHMARKS.md): 58 unit tests in `src/`, and 124 oracle
+`zig build test` runs 312 tests in about 25 minutes on the machine in
+[`BENCHMARKS.md`](BENCHMARKS.md): 58 unit tests in `src/`, and 127 oracle
 tests run twice, as `oracle` (the port's `@Vector` paths against the
 original's SIMD paths) and as `oracle-scalar` (both sides on their scalar
 paths). `-Dcorpus=false` skips the corpus tests, and `-Doracle-scalar=false`
@@ -200,8 +200,17 @@ that depend on the timing, in two runs of the original 9,167,360 and
 
 ### Build modes
 
-The recorded run of 306 tests is the default, ReleaseSafe. Three more runs
-check what the default run does not reach:
+The recorded run is the default, ReleaseSafe: 310 of 312 pass, and the 2
+skipped are a 32-bit-only test, in each oracle binary. Four more runs check
+what the default run does not reach (the second and third were last made
+with 306 tests, before the 32-bit fixes):
+
+- `-Dtarget=x86-linux-musl` runs the suite as a 32-bit x86 process, natively
+  on x86-64. With `-Dcorpus=false`, 58 of 58 unit tests pass, and in each
+  oracle binary 123 of 127 pass and 4 are skipped (the 3 corpus tests, and
+  the 2 GiB prefix, which is 64-bit only), in about 34 minutes. On 32-bit the tests that hold several contexts
+  of levels 20 to 22 at once skip those levels (`common.levelFits`): a long
+  run fragments the address space past where they fit.
 
 - `-Doverflow-correct-frequently` builds both sides with upstream's
   `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY`, so the window's index correction
@@ -218,7 +227,6 @@ check what the default run does not reach:
 
 ### State
 
-The oracle tests pass. The skeptics' review and its fixes are done, except
-for 32-bit targets: the port compiles for them and most tests pass, and
-[`STATUS.md`](../STATUS.md) lists what is left. The performance pass is under
-way.
+The oracle tests pass, on x86-64 and as a 32-bit x86 process. The skeptics'
+review and its fixes are done, and so is the performance pass;
+[`STATUS.md`](../STATUS.md) has the details.

@@ -120,10 +120,10 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
     on 64-bit targets; the tests take a 64-bit `usize` too (`1 << 40` output windows in
     `stream_test.zig` and `mt_test.zig`, a 64-bit constant at `lazy_test.zig:428`).
     Nothing builds or tests a 32-bit target, though `params.zig` keeps the 32-bit limits.
-    **Partly fixed** in `af1aa14`: `zig build check -Dtarget=x86-linux-musl` compiles,
-    and `test -Dtarget=x86-linux-musl -Dcorpus=false` runs natively here (22 minutes):
-    58 of 58 unit tests, and 116 of 124 oracle tests in each binary (4 skipped, the
-    64-bit-only ones). Left, stopped at the time box:
+    **Fixed** in `af1aa14` (it compiles, and the tests drop their 64-bit assumptions)
+    and in `6a5af9d`, `6368d7b`, `fdfe348`, `ccdf06d`, `99df126` and `05d37e0` (the
+    points below). `test -Dtarget=x86-linux-musl -Dcorpus=false` runs natively here in
+    about 34 minutes; counts in `doc/TESTING.md`. What was left after `af1aa14`:
     - **`p - window.base` without wrap-around** (55 sites: `fast.zig` 23,
       `double_fast.zig` 14, `compress_internal.zig` 7, `compress.zig` 5, `ldm.zig` 3,
       `opt.zig` 2, `lazy.zig` 1). A reused context keeps its indexes across frames, so
@@ -289,13 +289,11 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
   level 1 lose cycles in some layouts (`perf annotate` of both builds' hot loops).
 
 **To resume.**
-1. The 32-bit points above (the `p - window.base` sites without wrap-around, tables past
-   the address space, `initStatic`), now that the perf pass is merged into
-   `review/perf-and-skeptic`. Step 7 is otherwise done: the full suite with the corpora,
-   `-Dskeptic` and `-Doverflow-correct-frequently` pass (counts in `doc/TESTING.md`).
-2. The README headline rows ("N% faster/slower") from `doc/BENCHMARKS.md`, which holds
-   the table after the second perf pass.
-3. Step 8 after the author's review: merge into `main`, version and tag.
+1. Step 7 is done: the full suite with the corpora passes on x86-64 (310 of 312, the 2
+   skipped being the 32-bit-only refusal test), and the 32-bit suite passes (counts in
+   `doc/TESTING.md`). `-Dskeptic` and `-Doverflow-correct-frequently` last ran before
+   the 32-bit fixes.
+2. Step 8 after the author's review: merge into `main`, version and tag.
 
 Builds and timing: `perf` is blocked by `perf_event_paranoid` for agents on this
 machine. Time with the build lock held and pinned to one core, for example
