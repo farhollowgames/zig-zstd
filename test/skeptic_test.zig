@@ -348,6 +348,33 @@ fn expectSameFlushedStream(pair: Pair, src: []const u8) !void {
     try common.expectSameFrame(expected[0..upstream_out.pos], actual[0..port_out.pos]);
 }
 
+// `CCtx.refThreadPool` says the pool "must stay valid until it is replaced"
+// (and zstd.zig's `CCtx` doc says the same of the pool and the `Io`), but the
+// multithreaded context made at the first frame with workers keeps the pool
+// it was made with: after `refThreadPool(other)`, the workers still run on
+// the first pool, so freeing it as documented is a use after free. The
+// original behaves the same; the documentation is what is wrong.
+test "skeptic: a thread pool replaced by refThreadPool still runs the context's workers" {
+    if (@typeInfo(zstd.internal.zstdmt.ZstdmtCCtx) == .@"opaque") return error.SkipZigTest;
+    const io = std.testing.io;
+    const first = zstd.createThreadPool(gpa, io, 2) orelse return error.OutOfMemory;
+    defer zstd.freeThreadPool(first);
+    const second = zstd.createThreadPool(gpa, io, 2) orelse return error.OutOfMemory;
+    defer zstd.freeThreadPool(second);
+    const cctx = try zstd.CCtx.create(gpa);
+    defer cctx.destroy() catch unreachable;
+    try cctx.refThreadPool(first);
+    _ = try cctx.setParameter(.nb_workers, 2);
+    const src = try common.generated(3 << 20, 0.6, 0.3, 77);
+    defer gpa.free(src);
+    const dst = try gpa.alloc(u8, c.ZSTD_compressBound(src.len));
+    defer gpa.free(dst);
+    _ = try cctx.compress2(dst, src);
+    try cctx.refThreadPool(second);
+    _ = try cctx.compress2(dst, src);
+    try std.testing.expect(cctx.mtctx.?.factory.? == second);
+}
+
 // `Window.checkDictValidity` and `Window.enforceMaxDist` add the window size
 // to the dictionary's end index in u32 with `+`, where the original's U32 sum
 // wraps. A prefix of 2 GiB puts the end index at 2^31 + 2, and a window log
@@ -372,182 +399,4 @@ test "skeptic: a 2 GiB prefix with window log 31 overflows the dictionary's vali
         pair.port.refPrefix(prefix),
     );
     try expectSameFlushedStream(pair, src);
-}
-
-// `CCtx.refThreadPool` says the pool "must stay valid until it is replaced"
-// (and zstd.zig's `CCtx` doc says the same of the pool and the `Io`), but the
-// multithreaded context made at the first frame with workers keeps the pool
-// it was made with: after `refThreadPool(other)`, the workers still run on
-// the first pool, so freeing it as documented is a use after free. The
-// original behaves the same; the documentation is what is wrong.
-test "skeptic: a thread pool replaced by refThreadPool still runs the context's workers" {
-    if (@typeInfo(zstd.internal.zstdmt.ZstdmtCCtx) == .@"opaque") return error.SkipZigTest;
-    const io = std.testing.io;
-    const first = zstd.createThreadPool(gpa, io, 2) orelse return error.OutOfMemory;
-    defer zstd.freeThreadPool(first);
-    const second = zstd.createThreadPool(gpa, io, 2) orelse return error.OutOfMemory;
-    defer zstd.freeThreadPool(second);
-    const cctx = try zstd.CCtx.create(gpa);
-    defer cctx.destroy() catch unreachable;
-    try cctx.refThreadPool(first);
-    _ = try cctx.setParameter(.nb_workers, 2);
-    const src = try common.generated(3 << 20, 0.6, 0.3, 77);
-    defer gpa.free(src);
-    const dst = try gpa.alloc(u8, zstd.compressBound(src.len));
-    defer gpa.free(dst);
-    _ = try cctx.compress2(dst, src);
-    try cctx.refThreadPool(second);
-    _ = try cctx.compress2(dst, src);
-    try std.testing.expect(cctx.mtctx.?.factory.? == second);
-}
-
-// Probes run while looking for findings; kept only while they find one.
-
-/// Sets `dict` on both sides one `way`: 0 none, 1 loaded, 2 a CDict at
-/// `level`, 3 a prefix. The CDicts are returned for the caller to free.
-fn setDict(pair: Pair, way: u32, dict: []const u8, level: i32) !struct {
-    ?*zstd.CDict,
-    ?*c.ZSTD_CDict,
-} {
-    switch (way) {
-        1 => try frame.expectSameResult(
-            c.ZSTD_CCtx_loadDictionary(pair.upstream, dict.ptr, dict.len),
-            pair.port.loadDictionary(dict),
-        ),
-        2 => {
-            const port_cdict = try zstd.CDict.create(gpa, dict, level);
-            const upstream_cdict = c.ZSTD_createCDict(dict.ptr, dict.len, level).?;
-            try frame.expectSameResult(
-                c.ZSTD_CCtx_refCDict(pair.upstream, upstream_cdict),
-                pair.port.refCDict(port_cdict),
-            );
-            return .{ port_cdict, upstream_cdict };
-        },
-        3 => try frame.expectSameResult(
-            c.ZSTD_CCtx_refPrefix(pair.upstream, dict.ptr, dict.len),
-            pair.port.refPrefix(dict),
-        ),
-        else => {},
-    }
-    return .{ null, null };
-}
-
-test "skeptic probe: pledged sizes near 2^64 with dictionaries and workers" {
-    const corpus = try common.generated(400_000, 0.6, 0.3, 64);
-    defer gpa.free(corpus);
-    const dict = corpus[0..20_000];
-    const src = corpus[corpus.len - 150_000 ..];
-    const max = std.math.maxInt(u64);
-    const pledged_sizes = [_]u64{
-        max - 1,       max - 2, max - src.len, 1 << 63, (1 << 32) + 5, 1 << 32,
-        (1 << 32) - 1, 1 << 31, src.len + 1,
-    };
-    const levels = [_]i32{ -5, 1, 3, 9, 19 };
-    for (pledged_sizes) |pledged| for (0..4) |way| for (levels) |level| for ([_]i32{ 0, 2 }) |nb| {
-        errdefer std.debug.print("pledged {d}, dict way {d}, level {d}, workers {d}\n", .{
-            pledged, way, level, nb,
-        });
-        const pair = try Pair.init();
-        defer pair.deinit();
-        pair.port.setIo(std.testing.io);
-        try pair.set(.compression_level, level);
-        try pair.set(.nb_workers, nb);
-        const cdicts = try setDict(pair, @intCast(way), dict, level);
-        defer if (cdicts[0]) |d| d.destroy();
-        defer if (cdicts[1]) |d| {
-            _ = c.ZSTD_freeCDict(d);
-        };
-        try frame.expectSameResult(
-            c.ZSTD_CCtx_setPledgedSrcSize(pair.upstream, pledged),
-            pair.port.setPledgedSrcSize(pledged),
-        );
-        try expectSameFlushedStream(pair, src);
-    };
-}
-
-fn pick(random: std.Random, values: []const i32) i32 {
-    return values[random.uintLessThan(usize, values.len)];
-}
-
-test "skeptic probe: long distance matching at its largest tables and rates" {
-    // Two copies of the same 1 MiB far apart, with other data between.
-    const corpus = try common.generated(5 << 20, 0.5, 0.4, 65);
-    defer gpa.free(corpus);
-    @memcpy(corpus[4 << 20 ..], corpus[0 .. 1 << 20]);
-    const seed = common.fuzzSeed(9101);
-    var prng = std.Random.DefaultPrng.init(seed);
-    const random = prng.random();
-    for (0..@min(common.fuzz_cases, 40)) |case| {
-        errdefer std.debug.print("seed {d}, case {d}\n", .{ seed, case });
-        const pair = try Pair.init();
-        defer pair.deinit();
-        const hash_log = pick(random, &.{ 25, 26, 27, 25, 26, 20 });
-        const bucket = pick(random, &.{ 1, 4, 8, 8, 0 });
-        const min_match = pick(random, &.{ 4, 5, 64, 65, 4096, 0 });
-        const rate = pick(random, &.{ 0, 1, 7, 24, 25 });
-        const window_log = pick(random, &.{ 0, 27, 28, 31 });
-        const level = pick(random, &.{ 1, 3, 5, 7, 16, 19, 22 });
-        const streamed = random.boolean();
-        errdefer std.debug.print(
-            "ldm hash log {d}, bucket {d}, min match {d}, rate {d}, window {d}, " ++
-                "level {d}, streamed {}\n",
-            .{ hash_log, bucket, min_match, rate, window_log, level, streamed },
-        );
-        try pair.set(.enable_long_distance_matching, 1);
-        try pair.set(.ldm_hash_log, hash_log);
-        try pair.set(.ldm_bucket_size_log, bucket);
-        try pair.set(.ldm_min_match, min_match);
-        try pair.set(.ldm_hash_rate_log, rate);
-        try pair.set(.window_log, window_log);
-        try pair.set(.compression_level, level);
-        if (streamed) {
-            // An unknown size keeps the whole window; a stable input keeps
-            // it out of the context's buffers.
-            try pair.set(.stable_in_buffer, 1);
-            try expectSameFlushedStream(pair, corpus);
-        } else {
-            _ = try pair.compress2(corpus, c.ZSTD_compressBound(corpus.len));
-        }
-    }
-}
-
-test "skeptic probe: size hints near 2^31 with dictionaries, streamed" {
-    const corpus = try common.generated(400_000, 0.6, 0.3, 66);
-    defer gpa.free(corpus);
-    const dict = corpus[0..30_000];
-    const src = corpus[corpus.len - 150_000 ..];
-    const int_max = std.math.maxInt(i32);
-    const hints = [_]i32{ int_max, int_max - 1, int_max - 30_000, (1 << 30) + 1, 1 << 30 };
-    for (hints) |hint| for (0..4) |way| for ([_]i32{ 1, 3, 9, 19, 22 }) |level| {
-        errdefer std.debug.print("hint {d}, dict way {d}, level {d}\n", .{ hint, way, level });
-        const pair = try Pair.init();
-        defer pair.deinit();
-        try pair.set(.compression_level, level);
-        try pair.set(.src_size_hint, hint);
-        const cdicts = try setDict(pair, @intCast(way), dict, level);
-        defer if (cdicts[0]) |d| d.destroy();
-        defer if (cdicts[1]) |d| {
-            _ = c.ZSTD_freeCDict(d);
-        };
-        try expectSameFlushedStream(pair, src);
-    };
-}
-
-test "skeptic probe: the smallest blocks with superblocks at every level" {
-    const src = try common.generated(300_000, 0.6, 0.3, 67);
-    defer gpa.free(src);
-    for ([_]i32{ -5, 1, 2, 3, 5, 7, 13, 16, 19, 22 }) |level| for ([_]i32{
-        1340, 1341, 2000, 1 << 17,
-    }) |target| for ([_]i32{ 1024, 1025, 1500, 1 << 17 }) |max_block| {
-        errdefer std.debug.print("level {d}, target {d}, max block {d}\n", .{
-            level, target, max_block,
-        });
-        const pair = try Pair.init();
-        defer pair.deinit();
-        try pair.set(.compression_level, level);
-        try pair.set(.target_cblock_size, target);
-        try pair.set(.max_block_size, max_block);
-        _ = try pair.compress2(src, c.ZSTD_compressBound(src.len));
-        try expectSameFlushedStream(pair, src);
-    };
 }
