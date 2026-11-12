@@ -26,6 +26,17 @@ corpus runs.
 Pushing: not pushed: remote missing (`git ls-remote origin` fails; the author
 creates `farhollowgames/zig-zstd`).
 
+## For the author
+
+- std's decoder (`std.compress.zstd.Decompress`, Zig 0.17.0) cannot verify
+  checksums: with `.verify_checksum = true`, any frame with a checksum and a
+  non-empty block panics with "TODO all those bytes written needed to go
+  through the hasher too" (Decompress.zig:373). The smallest input that shows
+  it is one byte compressed with `ZSTD_c_checksumFlag` = 1. The tests decode
+  through std without checksum verification and through the original with it.
+- std's decoder takes no dictionaries, so frames made with a dictionary or a
+  prefix round-trip through the original's decoder only.
+
 ## Frame and one-shot compression
 
 | original | zig-zstd | state |
