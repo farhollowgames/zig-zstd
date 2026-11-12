@@ -1185,7 +1185,11 @@ pub inline fn storeSeqOnly(
     off_base: u32,
     match_length: usize,
 ) void {
-    const seq_index = (@intFromPtr(seq_store.sequences) -
+    // The next sequence's place in a local, stored once: a store through
+    // `seq_store` could otherwise be to the pointer itself, which would then
+    // be read again after every field.
+    const sequences = seq_store.sequences;
+    const seq_index = (@intFromPtr(sequences) -
         @intFromPtr(seq_store.sequences_start)) / @sizeOf(SeqDef);
     assert(seq_index < seq_store.max_nb_seq);
 
@@ -1196,9 +1200,6 @@ pub inline fn storeSeqOnly(
         seq_store.long_length_type = .literal_length;
         seq_store.long_length_pos = @intCast(seq_index);
     }
-    seq_store.sequences[0].lit_length = @truncate(lit_length);
-
-    seq_store.sequences[0].off_base = off_base;
 
     assert(match_length <= params.block_size_max);
     assert(match_length >= min_match);
@@ -1208,9 +1209,12 @@ pub inline fn storeSeqOnly(
         seq_store.long_length_type = .match_length;
         seq_store.long_length_pos = @intCast(seq_index);
     }
-    seq_store.sequences[0].ml_base = @truncate(ml_base);
-
-    seq_store.sequences += 1;
+    sequences[0] = .{
+        .off_base = off_base,
+        .lit_length = @truncate(lit_length),
+        .ml_base = @truncate(ml_base),
+    };
+    seq_store.sequences = sequences + 1;
 }
 
 /// `ZSTD_storeSeq`: copies `lit_length` literals from `literals` and stores
@@ -1225,26 +1229,28 @@ pub inline fn storeSeq(
 ) void {
     const lit_limit_w = @intFromPtr(lit_limit) -% zstd_internal.wildcopy_overlength;
     const lit_end = literals + lit_length;
+    // In a local, as `storeSeqOnly` has its pointer.
+    const lit = seq_store.lit;
     assert(seq_store.max_nb_lit <= 128 * 1024);
-    assert(@intFromPtr(seq_store.lit) + lit_length <=
+    assert(@intFromPtr(lit) + lit_length <=
         @intFromPtr(seq_store.lit_start) + seq_store.max_nb_lit);
     assert(@intFromPtr(lit_end) <= @intFromPtr(lit_limit));
     if (@intFromPtr(lit_end) <= lit_limit_w) {
         // The common case: copy 16 bytes first, as literals are likely short.
         comptime assert(zstd_internal.wildcopy_overlength >= 16);
-        zstd_internal.copy16(seq_store.lit, literals);
+        zstd_internal.copy16(lit, literals);
         if (lit_length > 16) {
             zstd_internal.wildcopy(
-                seq_store.lit + 16,
+                lit + 16,
                 literals + 16,
                 @as(isize, @intCast(lit_length)) - 16,
                 .no_overlap,
             );
         }
     } else {
-        safecopyLiterals(seq_store.lit, literals, lit_end, lit_limit_w);
+        safecopyLiterals(lit, literals, lit_end, lit_limit_w);
     }
-    seq_store.lit += lit_length;
+    seq_store.lit = lit + lit_length;
 
     storeSeqOnly(seq_store, lit_length, off_base, match_length);
 }

@@ -118,6 +118,9 @@ author's session on 11 November, during step 5.
 - Kept: `getLowerBits` masks with `bzhi` on BMI2 targets built with intrinsics, as
   `BIT_getLowerBits` does. In the final state, every level but 4 0.1% to 2.4% faster
   with it, level 4 0.6% and 1.0% slower.
+- Kept: `storeSeq` and `storeSeqOnly` read the literal and sequence pointers once into
+  locals and write the sequence whole. In the final state, levels 1 and 6 to 8 1.1% to 3.2%
+  faster with it, level -5 0.8% to 2.1% slower, the others within 1.1%.
 - Level 1 (fast): the search loop compiles to the same 51 instructions per two positions
   as the original's, and the function runs as many instructions; the gap is in cycles,
   not yet explained. Levels 5 to 8 (row matcher): the port runs no more instructions
