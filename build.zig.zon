@@ -1,0 +1,28 @@
+.{
+    .name = .zstd,
+    .version = "0.0.0",
+    .fingerprint = 0x72fd505e31dedfb1, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        // Test inputs, fetched only by the corpus tests and the benchmark.
+        .silesia = .{
+            .lazy = true,
+            .url = "https://sun.aei.polsl.pl/~sdeor/corpus/silesia.zip",
+            .hash = "N-V-__8AABTtoQyteKi1AL0OUreAhQnDUMebvAFWz2P-oFvH",
+        },
+        // A git mirror of the Canterbury corpus; its SHA1SUM files match
+        // the corpus site's.
+        .canterbury = .{
+            .lazy = true,
+            .url = "git+https://github.com/pfalcon/canterbury-corpus#c380ef9dc1dc62691757fdfeebdc2f85710e1e46",
+            .hash = "N-V-__8AAP2wGgEeEzKCSyYv-bdG2_Iz68at9qbwm5lRNkSB",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
+    },
+}
