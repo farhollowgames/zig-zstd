@@ -831,3 +831,54 @@ int reference_optEntropy(const void* sample, size_t sampleSize, unsigned seed,
     }
     return 0;
 }
+
+/* Sequence producers for the external sequence producer tests: one per
+ * mode, the same for the original and the port. */
+typedef struct {
+    int mode;
+    unsigned calls;
+} reference_ProducerState;
+
+size_t reference_sequenceProducer(void* state, ZSTD_Sequence* outSeqs, size_t outSeqsCapacity,
+                                  const void* src, size_t srcSize, const void* dict,
+                                  size_t dictSize, int compressionLevel, size_t windowSize)
+{
+    static const size_t offsets[] = { 1, 4, 64, 1000 };
+    reference_ProducerState* const s = (reference_ProducerState*)state;
+    const BYTE* const ip = (const BYTE*)src;
+    size_t nbSeqs = 0;
+    size_t pos = 0;
+    size_t litStart = 0;
+    (void)dict; (void)dictSize; (void)compressionLevel; (void)windowSize;
+    s->calls++;
+    if (s->mode == 1) return ZSTD_SEQUENCE_PRODUCER_ERROR;
+    if (s->mode == 2) return outSeqsCapacity + 1;
+    while (pos + 4 <= srcSize) {
+        size_t best = 0, bestOff = 0, i;
+        for (i = 0; i < sizeof(offsets) / sizeof(offsets[0]); i++) {
+            size_t const off = offsets[i];
+            size_t len = 0;
+            if (off > pos) break;
+            while (pos + len < srcSize && ip[pos + len] == ip[pos + len - off]) len++;
+            if (len > best) { best = len; bestOff = off; }
+        }
+        if (best >= 4) {
+            if (nbSeqs + 2 > outSeqsCapacity) break;
+            outSeqs[nbSeqs].offset = (unsigned)bestOff;
+            outSeqs[nbSeqs].litLength = (unsigned)(pos - litStart);
+            outSeqs[nbSeqs].matchLength = (unsigned)best;
+            outSeqs[nbSeqs].rep = 0;
+            nbSeqs++;
+            pos += best;
+            litStart = pos;
+        } else {
+            pos++;
+        }
+    }
+    if (nbSeqs + 1 > outSeqsCapacity) return ZSTD_SEQUENCE_PRODUCER_ERROR;
+    outSeqs[nbSeqs].offset = 0;
+    outSeqs[nbSeqs].litLength = (unsigned)(srcSize - litStart) + (s->mode == 3 ? 1 : 0);
+    outSeqs[nbSeqs].matchLength = 0;
+    outSeqs[nbSeqs].rep = 0;
+    return nbSeqs + 1;
+}

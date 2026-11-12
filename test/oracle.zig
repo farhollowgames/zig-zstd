@@ -42,3 +42,7 @@ test {
 test {
     _ = @import("opt_test.zig");
 }
+
+test {
+    _ = @import("frame_test.zig");
+}
