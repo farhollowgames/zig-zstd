@@ -23,8 +23,8 @@ zig build <step> -j3`, never while the scratchpad's `bench.running` exists.
 `zig build check` compiles everything; `zig build test -Dcorpus=false` skips the
 corpus runs.
 
-Pushing: not pushed: remote missing (`git ls-remote origin` fails; the author
-creates `farhollowgames/zig-zstd`).
+Pushing: `main` and the review branch go to
+`git@github.com:farhollowgames/zig-zstd.git`, fast-forward only.
 
 ## For the author
 
