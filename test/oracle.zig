@@ -52,3 +52,8 @@ test {
     _ = @import("compress_sequences_test.zig");
     _ = @import("corpus_test.zig");
 }
+
+test {
+    // The skeptic's findings fail until fixed, so they run only with -Dskeptic.
+    if (@import("test_options").skeptic) _ = @import("skeptic_test.zig");
+}

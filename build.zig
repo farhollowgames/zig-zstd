@@ -49,6 +49,11 @@ pub fn build(b: *std.Build) void {
         "corpus",
         "Run the Silesia and Canterbury corpus tests (default true)",
     ) orelse true;
+    const skeptic = b.option(
+        bool,
+        "skeptic",
+        "Run the skeptic tests, which fail until their findings are fixed (default false)",
+    ) orelse false;
 
     const test_step = b.step("test", "Run unit and oracle tests");
     const check_step = b.step("check", "Compile the library and its tests without running them");
@@ -83,6 +88,7 @@ pub fn build(b: *std.Build) void {
         const options = b.addOptions();
         options.addOption(u64, "fuzz_seed", fuzz_seed);
         options.addOption(u32, "fuzz_cases", fuzz_cases);
+        options.addOption(bool, "skeptic", skeptic);
         options.addOption(bool, "simd", variant.port_simd);
         options.addOption(bool, "corpus", silesia != null and canterbury != null);
         if (silesia) |dep| options.addOptionPathDirectory("silesia", dep.path("")) else {
