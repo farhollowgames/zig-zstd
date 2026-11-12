@@ -67,7 +67,7 @@ pub const short_cache_tag_mask: u32 = (1 << short_cache_tag_bits) - 1;
 /// The original's `ZSTD_CDict_s`, defined in zstd_compress.c.
 pub const CDict = opaque {};
 /// The original's `ZSTD_threadPool` (POOL_ctx), from pool.c.
-pub const ThreadPool = opaque {};
+pub const ThreadPool = @import("../common/pool.zig").ThreadPool;
 /// The original's `ZSTDMT_CCtx`, from zstdmt_compress.c.
 pub const ZstdmtCCtx = opaque {};
 
