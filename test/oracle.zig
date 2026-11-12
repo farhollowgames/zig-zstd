@@ -38,3 +38,7 @@ test {
     _ = @import("literals_sequences_test.zig");
     _ = @import("ldm_test.zig");
 }
+
+test {
+    _ = @import("opt_test.zig");
+}

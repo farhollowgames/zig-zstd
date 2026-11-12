@@ -443,7 +443,8 @@ pub extern fn reference_fseGetMaxNbBits(ct: [*]const c_uint, symbol: c_uint) c_u
 // zstd_ldm.c. Parameters go as six numbers: enable, hash log, bucket size
 // log, minimum match length, hash rate log, window log.
 
-/// `rawSeq`.
+
+/// The original's `rawSeq`, a long distance match candidate.
 pub const RawSeq = extern struct {
     offset: u32,
     lit_length: u32,
@@ -547,3 +548,78 @@ pub extern fn reference_ldmBlockTest(
     long_length_pos: *u32,
     nb_raw: *usize,
 ) usize;
+/// The optimal parser's block-level driver in test/reference.c.
+pub const OptTest = opaque {};
+
+/// What a block of the optimal parser's driver leaves.
+pub const OptResult = extern struct {
+    seqs: [*]const SeqDef,
+    nb_seq: usize,
+    lits: [*]const u8,
+    nb_lit: usize,
+    long_length_type: u32,
+    long_length_pos: u32,
+    rep: [3]u32,
+    next_to_update: u32,
+    dict_limit: u32,
+    low_limit: u32,
+    loaded_dict_end: u32,
+    base: [*]const u8,
+    lit_freq: [*]const u32,
+    lit_length_freq: [*]const u32,
+    match_length_freq: [*]const u32,
+    off_code_freq: [*]const u32,
+    lit_sum: u32,
+    lit_length_sum: u32,
+    match_length_sum: u32,
+    off_code_sum: u32,
+    lit_sum_base_price: u32,
+    lit_length_sum_base_price: u32,
+    match_length_sum_base_price: u32,
+    off_code_sum_base_price: u32,
+    price_type: u32,
+    hash_log3: u32,
+    hash_table: [*]const u32,
+    chain_table: [*]const u32,
+    hash_table3: [*]const u32,
+    dict_hash_table: ?[*]const u32,
+    dict_chain_table: ?[*]const u32,
+    ldm_pos: usize,
+    ldm_pos_in_sequence: usize,
+};
+
+/// A match state for the optimal parser, set up as a fresh compression sets
+/// it up. `dict_kind` as `reference_blockTest`'s; the entropy tables are the
+/// previous block's, null for a fresh context's; `ldm` holds the long
+/// distance candidates for the whole input. Null when out of memory.
+pub extern fn reference_optTestCreate(
+    cparams: *const ZSTD_compressionParameters,
+    dict_kind: c_int,
+    dict: ?*const anyopaque,
+    dict_size: usize,
+    dict_cparams: *const ZSTD_compressionParameters,
+    block_size_max: usize,
+    literal_compression_mode: c_uint,
+    huf_ctable: ?[*]const usize,
+    huf_repeat: c_uint,
+    of_ctable: ?[*]const u32,
+    ml_ctable: ?[*]const u32,
+    ll_ctable: ?[*]const u32,
+    ldm: ?[*]const RawSeq,
+    nb_ldm: usize,
+) ?*OptTest;
+pub extern fn reference_optTestFree(t: ?*OptTest) void;
+/// Compresses the next block of the input; returns its last literals' size.
+pub extern fn reference_optTestBlock(t: *OptTest, src: ?*const anyopaque, src_size: usize) usize;
+pub extern fn reference_optTestResult(t: *const OptTest, result: *OptResult) void;
+/// Entropy tables as a dictionary's, from `sample`'s byte counts and `seed`;
+/// returns 0, or 1 on an error.
+pub extern fn reference_optEntropy(
+    sample: ?*const anyopaque,
+    sample_size: usize,
+    seed: c_uint,
+    huf_ctable: [*]usize,
+    of_ctable: [*]u32,
+    ml_ctable: [*]u32,
+    ll_ctable: [*]u32,
+) c_int;

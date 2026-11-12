@@ -79,8 +79,10 @@ Pushing: `main` and the review branch go to
 | the row-based match finder (`useRowMatchFinder`), SSE2 and NEON tag compare | `lazy.zig`, `@Vector` | not started |
 | `ZSTD_btlazy2` (binary tree) | `lazy.zig` | not started |
 | dedicated dictionary search (`enableDedicatedDictSearch`) | `lazy.zig` | not started |
-| `ZSTD_btopt`, `ZSTD_btultra`, `ZSTD_btultra2` | `opt.zig` | not started |
-| long-distance matching (`zstd_ldm.c`) | `ldm.zig` | oracle-tested below the frame (`test/ldm_test.zig`): gear hash splits, parameter defaults, sequence skipping and splitting, and `ZSTD_ldm_generateSequences` (raw sequences, hash table, bucket offsets, window) over far repeats, golden and test/data files, external dictionaries, loaded dictionaries, full stores and the overflow correction; `ZSTD_ldm_blockCompress` with fast and dfast blocks. The other strategies and the frame path wait for their ports. `ZSTD_ldm_gear_reset` never stores its hash in the original, so it leaves the state unchanged, and the port keeps that |
+| `ZSTD_btopt`, `ZSTD_btultra`, `ZSTD_btultra2` (`zstd_opt.c`), with dictMatchState and extDict, btultra2's two passes over the first block | `opt.zig` | oracle-tested per block (`test/opt_test.zig`); frame-level tests wait for the frame path |
+| the optimal parser's price model: dictionary entropy tables, fixed prices for tiny blocks, literal compression off, statistics across blocks | `opt.zig` | oracle-tested per block |
+| long distance match candidates in the optimal parser (`ZSTD_optLdm_*`) | `opt.zig` | oracle-tested per block, on hand-made candidates; with `ldm.zig`'s once it lands |
+| long-distance matching (`zstd_ldm.c`) | `ldm.zig` | not started |
 | `ZSTD_getCParams`, `ZSTD_getParams`, `ZSTD_checkCParams`, `ZSTD_adjustCParams` | same | not started |
 
 ## Entropy coding

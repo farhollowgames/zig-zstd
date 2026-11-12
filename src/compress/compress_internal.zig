@@ -173,6 +173,13 @@ pub const SeqStore = struct {
     long_length_pos: u32 = 0,
 };
 
+/// `ZSTD_resetSeqStore`: empties the store.
+pub fn resetSeqStore(seq_store: *SeqStore) void {
+    seq_store.lit = seq_store.lit_start;
+    seq_store.sequences = seq_store.sequences_start;
+    seq_store.long_length_type = .none;
+}
+
 pub const SequenceLength = struct {
     lit_length: u32,
     match_length: u32,

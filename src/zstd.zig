@@ -25,6 +25,7 @@ pub const internal = struct {
     pub const compress_literals = @import("compress/compress_literals.zig");
     pub const compress_sequences = @import("compress/compress_sequences.zig");
     pub const ldm = @import("compress/ldm.zig");
+    pub const opt = @import("compress/opt.zig");
 };
 
 test {
@@ -45,4 +46,5 @@ test {
     _ = @import("compress/compress_literals.zig");
     _ = @import("compress/compress_sequences.zig");
     _ = @import("compress/ldm.zig");
+    _ = @import("compress/opt.zig");
 }
