@@ -344,7 +344,11 @@ inline fn compressBlockDoubleFastNoDictGeneric(
                             std.mem.readInt(u32, (ip - offset_2)[0..4], native_endian))
                     {
                         const r_length = ci.count(ip + 4, ip + 4 - offset_2, iend) + 4;
-                        std.mem.swap(u32, &offset_1, &offset_2);
+                        // Swapped through a temporary, as in the original: std.mem.swap goes
+                        // byte by byte, which splits both offsets into bytes for the whole loop.
+                        const tmp_off = offset_2;
+                        offset_2 = offset_1;
+                        offset_1 = tmp_off;
                         const index: u32 = @intCast(@intFromPtr(ip) - @intFromPtr(base));
                         hash_small[ci.hashPtr(ip, h_bits_s, mls)] = index;
                         hash_long[ci.hashPtr(ip, h_bits_l, 8)] = index;
@@ -664,7 +668,9 @@ inline fn compressBlockDoubleFastDictMatchStateGeneric(
                         {
                             const rep_end2 = if (rep_index2 < prefix_lowest_index) dict_end else iend;
                             const rep_length2 = ci.count2Segments(ip + 4, rep_match2 + 4, iend, rep_end2, prefix_lowest) + 4;
-                            std.mem.swap(u32, &offset_1, &offset_2);
+                            const tmp_off = offset_2;
+                            offset_2 = offset_1;
+                            offset_1 = tmp_off;
                             ci.storeSeq(seq_store, 0, anchor, iend, ci.repcode1_to_offbase, rep_length2);
                             hash_small[ci.hashPtr(ip, h_bits_s, mls)] = current2;
                             hash_long[ci.hashPtr(ip, h_bits_l, 8)] = current2;
@@ -884,7 +890,9 @@ fn compressBlockDoubleFastExtDictGeneric(
                 {
                     const rep_end2 = if (rep_index2 < prefix_start_index) dict_end else iend;
                     const rep_length2 = ci.count2Segments(ip + 4, rep_match2 + 4, iend, rep_end2, prefix_start) + 4;
-                    std.mem.swap(u32, &offset_1, &offset_2);
+                    const tmp_off = offset_2;
+                    offset_2 = offset_1;
+                    offset_1 = tmp_off;
                     ci.storeSeq(seq_store, 0, anchor, iend, ci.repcode1_to_offbase, rep_length2);
                     hash_small[ci.hashPtr(ip, h_bits_s, mls)] = current2;
                     hash_long[ci.hashPtr(ip, h_bits_l, 8)] = current2;

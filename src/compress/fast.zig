@@ -362,7 +362,11 @@ inline fn compressBlockFastNoDictGeneric(
                             std.mem.readInt(u32, (ip0 - rep_offset2)[0..4], native_endian))
                     {
                         const r_length = ci.count(ip0 + 4, ip0 + 4 - rep_offset2, iend) + 4;
-                        std.mem.swap(u32, &rep_offset1, &rep_offset2);
+                        // Swapped through a temporary, as in the original: std.mem.swap goes
+                        // byte by byte, which splits both offsets into bytes for the whole loop.
+                        const tmp_off = rep_offset2;
+                        rep_offset2 = rep_offset1;
+                        rep_offset1 = tmp_off;
                         hash_table[ci.hashPtr(ip0, hlog, mls)] =
                             @intCast(@intFromPtr(ip0) - @intFromPtr(base));
                         ip0 += r_length;
@@ -600,7 +604,9 @@ inline fn compressBlockFastDictMatchStateGeneric(
                 {
                     const rep_end2 = if (rep_index2 < prefix_start_index) dict_end else iend;
                     const rep_length2 = ci.count2Segments(ip0 + 4, rep_match2 + 4, iend, rep_end2, prefix_start) + 4;
-                    std.mem.swap(u32, &offset_1, &offset_2);
+                    const tmp_off = offset_2;
+                    offset_2 = offset_1;
+                    offset_1 = tmp_off;
                     ci.storeSeq(seq_store, 0, anchor, iend, ci.repcode1_to_offbase, rep_length2);
                     hash_table[ci.hashPtr(ip0, hlog, mls)] = current2;
                     ip0 += rep_length2;
@@ -885,7 +891,9 @@ fn compressBlockFastExtDictGeneric(
                     {
                         const rep_end2 = if (rep_index2 < prefix_start_index) dict_end else iend;
                         const rep_length2 = ci.count2Segments(ip0 + 4, rep_match2 + 4, iend, rep_end2, prefix_start) + 4;
-                        std.mem.swap(u32, &offset_1, &offset_2);
+                        const tmp_off = offset_2;
+                        offset_2 = offset_1;
+                        offset_1 = tmp_off;
                         ci.storeSeq(seq_store, 0, anchor, iend, ci.repcode1_to_offbase, rep_length2);
                         hash_table[ci.hashPtr(ip0, hlog, mls)] = current2;
                         ip0 += rep_length2;

@@ -73,15 +73,35 @@ author's session on 11 November, during step 5.
   and 1 are unchanged. The oracle tests pass on both builds.
 - `port/*`: the merged porting branches, kept for history.
 
+**The second performance pass** (`review/perf-2`, worktree `zig-zstd.wt/perf2`), as of
+23:50 on 11 November:
+- Profiling works: `perf record -e cycles:u` (user-mode events pass `perf_event_paranoid`
+  2; only kernel events are blocked). In a profile of the bench, `bench` is the port and
+  `libzstd_reference.so` the original, so `perf report --sort dso,sym` compares them
+  function by function. Sample with `-c 1000000`; pin with `taskset -c 6` under the lock.
+- Level 3 before this pass: the dfast block compressor took 40.9% of the cycles against
+  the original's 37.6%, and ran 32% more instructions (37.8% of all instructions against
+  28.6%). The inner search loops cost the same; the match path (count, storeSeq, table
+  inserts, repeat offsets) cost about 30% more. The entropy stages are even.
+- Found: `std.mem.swap` in Zig 0.17 swaps byte by byte, so the repeat offsets it swaps
+  are split into four bytes for the whole function (shifts, `movzbl`, `or` on every
+  match). Work in progress, committed untested: fast and dfast (all dictionary modes)
+  and the Huffman sort swap through a temporary, as the original does. Quick pinned run
+  (5 runs, port s and port / original, before and after): level 3 0.497 s (1.078) to
+  0.477 s (1.031); level 4 0.074 s (1.098) to 0.072 s (1.058); level 1 unchanged, 0.289 s
+  (1.058). Still to do for it: `zb.sh <wt> test -Dcorpus=false -Dtest-filter=fast`
+  (and `double`, `huf`), then a commit noting the tests.
+- Next: the dfast noDict loop as one labeled switch with named `continue` targets (the
+  `found`/`next` dispatch compiles to `jmp *(table)` jump tables); the patch is in the
+  scratchpad as `zstd/perf2/dfast-restructure.patch`, untested. Then the repeat-offset
+  test as a non-short-circuit `&`, as the original's; then level 1 (fast: profile first,
+  the swap did not move it), then levels 5 to 8 (row matcher). `std.mem.copyForwards` in
+  `zstdmt.zig` is a byte loop (the original uses memmove); check before the MT rows.
+- At the end: set `port_multithread_merged = true` in bench/bench.zig if the MT rows run,
+  and replace the table in `doc/BENCHMARKS.md` from one full pinned `--runs 5` run.
+
 **To resume.**
-1. Step 5 on `review/perf-and-skeptic`, by a fresh agent: level 3 (dfast) is still about
-   9% to 10% slower on whole files, level 1 (fast) a steady 5.6% slower, levels 5, 7 and 8
-   (row matcher) 3% to 6% slower; nothing located yet. `perf` is blocked by
-   `perf_event_paranoid` on this machine, so a profile needs the author to lower it.
-   The dfast loop's labeled `switch`/`continue` compiles to table jumps where upstream has
-   direct gotos (not measured). The bench's `port_multithread_merged` switch
-   (bench/bench.zig) can now be set to true, since the streaming MT path is merged. Rerun
-   `zig build bench` at the end and replace the tables in `doc/BENCHMARKS.md`.
+1. Step 5 on `review/perf-2`: continue from the notes above.
 2. Step 6, a fresh skeptic agent on the same branch, with the open points below as a
    start: upstream asserts that safe builds turn into panics on caller-supplied
    dictionaries and sequences, the two upstream out-of-bounds reads the stream tests avoid,
