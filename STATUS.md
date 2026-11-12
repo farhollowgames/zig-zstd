@@ -121,6 +121,8 @@ author's session on 11 November, during step 5.
 - Kept: `storeSeq` and `storeSeqOnly` read the literal and sequence pointers once into
   locals and write the sequence whole. In the final state, levels 1 and 6 to 8 1.1% to 3.2%
   faster with it, level -5 0.8% to 2.1% slower, the others within 1.1%.
+- Kept: the bench's last column says "within noise" where the two sides' min-max spreads
+  overlap.
 - Level 1 (fast): the search loop compiles to the same 51 instructions per two positions
   as the original's, and the function runs as many instructions; the gap is in cycles,
   not yet explained. Levels 5 to 8 (row matcher): the port runs no more instructions

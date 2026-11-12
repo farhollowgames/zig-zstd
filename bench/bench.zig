@@ -389,9 +389,17 @@ const Table = struct {
         cells[6] = cellText(&storage[6], "{d:.1}", .{r.port.rate(r.input_bytes)});
         cells[7] = timingCell(&storage[7], r.original);
         cells[8] = timingCell(&storage[8], r.port);
-        const verdict = if (time_ratio < 1) "faster" else "slower";
-        const share = @abs(1 - time_ratio) * 100;
-        cells[9] = cellText(&storage[9], "{d:.3}, {d:.1}% {s}", .{ time_ratio, share, verdict });
+        // When the two sides' spreads overlap, the runs do not settle which side is faster.
+        const overlap = r.port.min_ns <= r.original.max_ns and r.original.min_ns <= r.port.max_ns;
+        if (overlap) {
+            cells[9] = cellText(&storage[9], "{d:.3}, within noise", .{time_ratio});
+        } else {
+            const verdict = if (time_ratio < 1) "faster" else "slower";
+            const share = @abs(1 - time_ratio) * 100;
+            cells[9] = cellText(&storage[9], "{d:.3}, {d:.1}% {s}", .{
+                time_ratio, share, verdict,
+            });
+        }
         try self.line(&cells);
         if (r.frames_differing != 0) {
             try self.note("FRAME DIFFERS: {d} of {d} frames differ from the original's " ++
@@ -590,7 +598,9 @@ pub fn main(init: std.process.Init) !void {
     try info(w, markdown, "method: one `compress2` a frame, a reused context per side; an " ++
         "untimed warm-up of each side, then the median of {s}, the sides taking turns; " ++
         "MB are 1e6 input bytes, the verdict is the time saved or added as a share of " ++
-        "the original's", .{runs_text});
+        "the original's, or within noise when the two sides' min-max spreads overlap", .{
+        runs_text,
+    });
     try w.writeAll("\n");
 
     var rows: std.ArrayList(Row) = .empty;
