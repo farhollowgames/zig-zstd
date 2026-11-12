@@ -73,24 +73,59 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
   as upstream's inline-asm `ZSTD_selectAddr` is; level 4 takes 11% less time), and the
   first skeptic's probes in `test/skeptic_test.zig` behind `-Dskeptic` (all passing). A
   second skeptic adds failing tests there, one per finding, named `skeptic: ...`.
-- The second skeptic, in progress (stopped at the save point of 11 November, 23:50):
-  - `-Doverflow-correct-frequently` (build.zig) builds the port and the original with
-    `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY`, for the oracle tests only. With it, 33 of
-    34 oracle tests pass (one-shot, streams, dictionaries, prefixes, CDicts, sizes,
-    workers, LDM, small windows; 150 fuzz cases each, `-Doracle-scalar=false`); the one
-    failure is two runs of the original disagreeing on `ZSTD_sizeof_CCtx` with workers
-    in `zstdmt: a context reused, resized, abandoned mid-frame, on a shared pool`
-    (9,167,360 against 7,337,440), the timing flake the first skeptic noted, here in an
-    existing test.
-  - Written, not yet compiled or run: `skeptic: a 2 GiB prefix with window log 31
-    overflows the dictionary's validity check` (`Window.checkDictValidity` and
-    `enforceMaxDist` add in u32 with `+` where the original wraps) and `skeptic: a thread
-    pool replaced by refThreadPool still runs the context's workers` (the documentation
-    says the pool may go once replaced; the multithreaded context keeps it), and four
-    `skeptic probe:` tests (pledged sizes near 2^64, LDM at its largest tables, size hints
-    near 2^31 with dictionaries, the smallest blocks with superblocks), to be dropped if
-    they pass.
-  - Next: run those, then the oracle tests in Debug per area, then the report.
+- The second skeptic (11 and 12 November), its tests behind `-Dskeptic`:
+  - `skeptic: a 2 GiB prefix with window log 31 overflows the dictionary's validity
+    check` panics with an integer overflow: `Window.checkDictValidity` and
+    `Window.enforceMaxDist` (`compress_internal.zig`) add the window size to the
+    dictionary's end in u32 with `+`, where the original's sums wrap. Any dictionary,
+    prefix or CDict whose end index reaches 2^31 with window log 31 gets there; the
+    dictMatchState assert in `double_fast.zig` (`dict_limit + (1 << window_log)`) is the
+    same sum. Fix: `+%`, as `canOverflowCorrect` has.
+  - `skeptic: a thread pool replaced by refThreadPool still runs the context's workers`
+    fails: the multithreaded context keeps the pool and the `Io` it was made with, so
+    the docs of `refThreadPool`, of the `pool` field and of `CCtx` in `zstd.zig` ("until
+    they are replaced") promise what neither the port nor the original does. Fix the
+    docs (valid until the context is destroyed), or drop the multithreaded context when
+    the pool or the `Io` changes.
+  - Docs: `copyCCtx` does not say that the copy refers to what the source's window
+    refers to (a `compressBeginUsingDict` dictionary, a CDict's content) until its frame
+    ends, and `zstd.zig`'s list of references misses it.
+  - `test/mt_test.zig`'s `Observed` compares `sizeof_after_init` with workers, which
+    differs between two runs of the original itself (9,167,360 against 7,337,440 in
+    `zstdmt: a context reused, resized, abandoned mid-frame, on a shared pool`): drop it
+    with workers.
+  - `-Doverflow-correct-frequently` (build.zig) builds both sides with
+    `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY`, so the main window's overflow correction
+    (`reduceIndex`, never reached by the normal suite) runs: 33 of 34 frame, stream,
+    dictionary, worker and LDM tests pass at 150 fuzz cases; the 34th is the flake above.
+  - Debug (`-Dtest-optimize=Debug`, 40 fuzz cases): entropy, fast, dfast, lazy, opt and
+    LDM, 50 of 50; frame, dictionaries, streams, sequences and workers, 54 of
+    55 before the run was stopped in the 55th (`CDict: every way to make one ...`, still
+    running after 18 minutes); in Debug the 2 GiB prefix test panics at
+    `compress_internal.zig:545` (`checkDictValidity`).
+  - 32-bit (`-Dtarget=x86-linux-musl`, run natively): the port does not compile.
+    `compress_internal.zig:1100` and `compress_literals.zig:77` shift a `usize` by a
+    `u6`, and `fse_compress.zig:589` and `:598` mix `isize` with `u32`, which fit only
+    on 64-bit targets; the tests take a 64-bit `usize` too (`1 << 40` output windows in
+    `stream_test.zig` and `mt_test.zig`, a 64-bit constant at `lazy_test.zig:428`).
+    Nothing builds or tests a 32-bit target, though `params.zig` keeps the 32-bit limits.
+  - The benchmark: the original is a shared library built without upstream's own
+    `-fvisibility=hidden` (`reference/lib/Makefile:147`), so 460 call sites into its
+    own functions (`HIST_countFast_wksp`, `FSE_buildCTable_wksp`, `HUF_buildCTable_wksp`,
+    `ZSTD_selectBlockCompressor`, ...) go through the PLT, unlike upstream's own `.so` or
+    `.a`; likely small, not measured. The verdicts are medians with no noise floor: the
+    -5 and -1 rows' "faster" (3.0%, 1.6%) sit inside min-max spreads of 28% to 64% of
+    their medians.
+  - Coverage: the fuzzers cap the window log at 25, hash and chain logs at 24, the LDM
+    hash log at 22 and its rate at 9 (`frame_params_test.zig:165`), on inputs of at most
+    400 KB from one generated buffer, and dictionaries stay at or below 110 KB; no test
+    sets a window log above 25, which is where the overflow above lives. `oracle-scalar`
+    runs other port code only in the row matcher's tag compare and the sequence
+    conversion.
+  - Probes that found nothing: pledged sizes near 2^64 with dictionaries, CDicts,
+    prefixes and workers; LDM hash logs 25 to 27, bucket log 8, minimum matches 4 to
+    4096, rates 0 to 25, window logs 27 to 31; size hints near 2^31 with dictionaries;
+    `max_block_size` 1024 with superblocks.
 - `review/perf-2` (worktree `zig-zstd.wt/perf2`): the second perf pass, made from
   `review/perf-and-skeptic`. Its target is no level slower than upstream, level 3 and 4
   first. Each kept change is one commit with its pinned-core gain in the message; its
@@ -99,9 +134,10 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
 
 **To resume.**
 1. Step 7 on `review/perf-and-skeptic`: fix each `skeptic: ...` test until it passes
-   (the tests fail first). Known from the first skeptic: `common.generated(0, ...)`
-   segfaults because upstream's datagen writes the first byte even for size 0 (guard it
-   in `test/common.zig`); `ZSTD_sizeof_CCtx` with workers depends on timing in upstream
+   (the tests fail first), and the second skeptic's other points above. Known from the
+   first skeptic: `common.generated(0, ...)` segfaults because upstream's datagen writes
+   the first byte even for size 0 (`programs/datagen.c:119`; guard it in
+   `test/common.zig`); `ZSTD_sizeof_CCtx` with workers depends on timing in upstream
    itself, so exact sizeof comparisons with workers can flake.
 2. Merge `review/perf-2` into `review/perf-and-skeptic`; run the full suite with the
    corpora; set `port_multithread_merged = true` in bench/bench.zig if the perf pass has
