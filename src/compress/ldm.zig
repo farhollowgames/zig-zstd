@@ -244,6 +244,8 @@ fn fillFastTables(ms: *MatchState, end: [*]const u8) void {
         .fast => fast.fillHashTable(ms, end, .fast, .for_cctx),
         .dfast => double_fast.fillDoubleHashTable(ms, end, .fast, .for_cctx),
         .greedy, .lazy, .lazy2, .btlazy2, .btopt, .btultra, .btultra2 => {},
+        // An applied match state's strategy is always one of the above.
+        _ => unreachable,
     }
 }
 
