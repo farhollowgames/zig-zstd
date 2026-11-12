@@ -65,23 +65,14 @@ pub fn gearInit(state: *RollingHashState, ldm_params: *const LdmParams) void {
     }
 }
 
-/// `ZSTD_ldm_gear_reset`: feeds `data[0..min_match_length]` into the hash
-/// without looking for splits, which resets the hash to depend on those
-/// bytes only. Used at the start of a block and after skipping input.
+/// `ZSTD_ldm_gear_reset`: meant to feed `data[0..min_match_length]` into
+/// the hash without looking for splits, at the start of a block and after a
+/// skip. The original computes that hash but never stores it, so the state
+/// is left as it is; the port does the same, as the output depends on it.
 pub fn gearReset(state: *RollingHashState, data: [*]const u8, min_match_length: usize) void {
-    var hash = state.rolling;
-    var n: usize = 0;
-    while (n + 3 < min_match_length) {
-        inline for (0..4) |_| {
-            hash = (hash << 1) +% gear_tab[data[n]];
-            n += 1;
-        }
-    }
-    while (n < min_match_length) {
-        hash = (hash << 1) +% gear_tab[data[n]];
-        n += 1;
-    }
-    state.rolling = hash;
+    _ = state;
+    _ = data;
+    _ = min_match_length;
 }
 
 /// `ZSTD_ldm_gear_feed`: appends to `splits` the split points in
@@ -344,7 +335,8 @@ fn generateSequencesInternal(
 
     if (src.len < min_match_length) return @intFromPtr(iend) - @intFromPtr(anchor);
 
-    // The hash starts over the first `min_match_length` bytes.
+    // The first `min_match_length` bytes are skipped; `gearReset` leaves
+    // the hash at its initial value, as the original's does.
     gearInit(&hash_state, ldm_params);
     gearReset(&hash_state, ip, min_match_length);
     ip += min_match_length;
@@ -515,7 +507,8 @@ pub fn generateSequences(
 
         // 1. Correct the indexes when they grow too large.
         const window = &ldm_state.window;
-        if (window.needOverflowCorrection(0, max_dist, ldm_state.loaded_dict_end, chunk_start, chunk_end)) {
+        const loaded_dict_end = ldm_state.loaded_dict_end;
+        if (window.needOverflowCorrection(0, max_dist, loaded_dict_end, chunk_start, chunk_end)) {
             const ldm_h_size = @as(u32, 1) << @intCast(ldm_params.hash_log);
             const correction = window.correctOverflow(0, max_dist, chunk_start);
             reduceTable(ldm_state.hash_table, ldm_h_size, correction);
@@ -846,18 +839,11 @@ test "gearInit puts the mask's bits as high as the match length allows" {
     try testing.expectEqual(@as(u64, 0), state.stop_mask);
 }
 
-test "gearReset depends only on the bytes it feeds" {
+test "gearReset leaves the state as it is, as the original's does" {
     const data = "0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz";
-    var a: RollingHashState = .{ .rolling = 0x1234, .stop_mask = 0 };
-    var b: RollingHashState = .{ .rolling = 0xFFFF_0000_0000, .stop_mask = 0 };
-    gearReset(&a, data, 64);
-    gearReset(&b, data, 64);
-    try testing.expectEqual(a.rolling, b.rolling);
-    var c: RollingHashState = .{ .rolling = 0, .stop_mask = 0 };
-    gearReset(&c, data, 7);
-    var expected: u64 = 0;
-    for (data[0..7]) |byte| expected = (expected << 1) +% gear_tab[byte];
-    try testing.expectEqual(expected, c.rolling);
+    var state: RollingHashState = .{ .rolling = 0x1234, .stop_mask = 0xF0 };
+    gearReset(&state, data, 64);
+    try testing.expectEqual(RollingHashState{ .rolling = 0x1234, .stop_mask = 0xF0 }, state);
 }
 
 test "adjustParameters fills in the defaults from the strategy" {
@@ -1054,8 +1040,8 @@ test "blockCompress stores the long matches between the compressor's literals" {
         .target_length = 0,
         .strategy = .greedy,
     };
-    var block = try ci.BlockTest.init(gpa, cparams, &src);
-    defer block.deinit();
+    const block = try ci.BlockTest.create(gpa, cparams, &src, .none, null);
+    defer block.destroy();
     var seqs = [_]RawSeq{
         .{ .offset = 300, .lit_length = 400, .match_length = 100 },
         .{ .offset = 50, .lit_length = 20, .match_length = 600 },

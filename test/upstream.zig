@@ -438,3 +438,188 @@ pub extern fn reference_fseBitCost(
     accuracy_log: c_uint,
 ) c_uint;
 pub extern fn reference_fseGetMaxNbBits(ct: [*]const c_uint, symbol: c_uint) c_uint;
+
+// Long distance matching: helpers in test/reference.c over the original's
+// zstd_ldm.c. Parameters go as six numbers: enable, hash log, bucket size
+// log, minimum match length, hash rate log, window log.
+
+
+/// The original's `rawSeq`, a long distance match candidate.
+pub const RawSeq = extern struct {
+    offset: u32,
+    lit_length: u32,
+    match_length: u32,
+};
+
+/// `ldmEntry_t`.
+pub const LdmEntry = extern struct {
+    offset: u32,
+    checksum: u32,
+};
+
+pub const ReferenceLdm = opaque {};
+
+pub extern fn reference_ldm_adjustParameters(
+    p: *[6]c_uint,
+    cparams: *const ZSTD_compressionParameters,
+) void;
+pub extern fn reference_ldm_getTableSize(p: *const [6]c_uint) usize;
+pub extern fn reference_ldm_getMaxNbSeq(p: *const [6]c_uint, max_chunk_size: usize) usize;
+pub extern fn reference_ldm_gearInit(
+    state: *[2]u64,
+    min_match_length: c_uint,
+    hash_rate_log: c_uint,
+) void;
+pub extern fn reference_ldm_gearReset(
+    state: *[2]u64,
+    data: [*]const u8,
+    min_match_length: usize,
+) void;
+pub extern fn reference_ldm_gearFeed(
+    state: *[2]u64,
+    data: [*]const u8,
+    size: usize,
+    splits: *[64]usize,
+    num_splits: *c_uint,
+) usize;
+pub extern fn reference_ldm_skipSequences(
+    seqs: [*]RawSeq,
+    size: usize,
+    pos: *usize,
+    src_size: usize,
+    min_match: c_uint,
+) void;
+pub extern fn reference_ldm_skipRawSeqStoreBytes(
+    seqs: [*]RawSeq,
+    size: usize,
+    pos: *usize,
+    pos_in_sequence: *usize,
+    nb_bytes: usize,
+) void;
+pub extern fn reference_ldm_maybeSplitSequence(
+    seqs: [*]RawSeq,
+    size: usize,
+    pos: *usize,
+    remaining: c_uint,
+    min_match: c_uint,
+    out: *RawSeq,
+) void;
+pub extern fn reference_ldm_create(p: *const [6]c_uint) ?*ReferenceLdm;
+pub extern fn reference_ldm_free(ldm: ?*ReferenceLdm) void;
+pub extern fn reference_ldm_hashTable(ldm: *const ReferenceLdm) [*]const LdmEntry;
+pub extern fn reference_ldm_bucketOffsets(ldm: *const ReferenceLdm) [*]const u8;
+pub extern fn reference_ldm_window(ldm: *const ReferenceLdm, out: *[7]usize) void;
+pub extern fn reference_ldm_shiftIndexes(ldm: *ReferenceLdm, shift: c_uint) void;
+pub extern fn reference_ldm_update(ldm: *ReferenceLdm, src: [*]const u8, size: usize) c_uint;
+pub extern fn reference_ldm_loadDictionary(
+    ldm: *ReferenceLdm,
+    dict: [*]const u8,
+    size: usize,
+    force_window: c_int,
+) void;
+pub extern fn reference_ldm_fillHashTable(ldm: *ReferenceLdm, src: [*]const u8, size: usize) void;
+pub extern fn reference_ldm_generateSequences(
+    ldm: *ReferenceLdm,
+    src: [*]const u8,
+    size: usize,
+    capacity: usize,
+    seqs: *[*]const RawSeq,
+    nb_seqs: *usize,
+) usize;
+/// One block compressed with long distance matching after the setup of a
+/// fresh compression without a dictionary (test/reference.c). Returns the
+/// size of the last literals, or the generator's error code.
+pub extern fn reference_ldmBlockTest(
+    cparams: *const ZSTD_compressionParameters,
+    ldm: *ReferenceLdm,
+    src: [*]const u8,
+    src_size: usize,
+    raw_capacity: usize,
+    hash_table: [*]u32,
+    chain_table: [*]u32,
+    seqs: [*]SeqDef,
+    seq_capacity: usize,
+    lits: [*]u8,
+    lit_capacity: usize,
+    rep: *[3]u32,
+    nb_seq: *usize,
+    nb_lit: *usize,
+    long_length_type: *u32,
+    long_length_pos: *u32,
+    nb_raw: *usize,
+) usize;
+/// The optimal parser's block-level driver in test/reference.c.
+pub const OptTest = opaque {};
+
+/// What a block of the optimal parser's driver leaves.
+pub const OptResult = extern struct {
+    seqs: [*]const SeqDef,
+    nb_seq: usize,
+    lits: [*]const u8,
+    nb_lit: usize,
+    long_length_type: u32,
+    long_length_pos: u32,
+    rep: [3]u32,
+    next_to_update: u32,
+    dict_limit: u32,
+    low_limit: u32,
+    loaded_dict_end: u32,
+    base: [*]const u8,
+    lit_freq: [*]const u32,
+    lit_length_freq: [*]const u32,
+    match_length_freq: [*]const u32,
+    off_code_freq: [*]const u32,
+    lit_sum: u32,
+    lit_length_sum: u32,
+    match_length_sum: u32,
+    off_code_sum: u32,
+    lit_sum_base_price: u32,
+    lit_length_sum_base_price: u32,
+    match_length_sum_base_price: u32,
+    off_code_sum_base_price: u32,
+    price_type: u32,
+    hash_log3: u32,
+    hash_table: [*]const u32,
+    chain_table: [*]const u32,
+    hash_table3: [*]const u32,
+    dict_hash_table: ?[*]const u32,
+    dict_chain_table: ?[*]const u32,
+    ldm_pos: usize,
+    ldm_pos_in_sequence: usize,
+};
+
+/// A match state for the optimal parser, set up as a fresh compression sets
+/// it up. `dict_kind` as `reference_blockTest`'s; the entropy tables are the
+/// previous block's, null for a fresh context's; `ldm` holds the long
+/// distance candidates for the whole input. Null when out of memory.
+pub extern fn reference_optTestCreate(
+    cparams: *const ZSTD_compressionParameters,
+    dict_kind: c_int,
+    dict: ?*const anyopaque,
+    dict_size: usize,
+    dict_cparams: *const ZSTD_compressionParameters,
+    block_size_max: usize,
+    literal_compression_mode: c_uint,
+    huf_ctable: ?[*]const usize,
+    huf_repeat: c_uint,
+    of_ctable: ?[*]const u32,
+    ml_ctable: ?[*]const u32,
+    ll_ctable: ?[*]const u32,
+    ldm: ?[*]const RawSeq,
+    nb_ldm: usize,
+) ?*OptTest;
+pub extern fn reference_optTestFree(t: ?*OptTest) void;
+/// Compresses the next block of the input; returns its last literals' size.
+pub extern fn reference_optTestBlock(t: *OptTest, src: ?*const anyopaque, src_size: usize) usize;
+pub extern fn reference_optTestResult(t: *const OptTest, result: *OptResult) void;
+/// Entropy tables as a dictionary's, from `sample`'s byte counts and `seed`;
+/// returns 0, or 1 on an error.
+pub extern fn reference_optEntropy(
+    sample: ?*const anyopaque,
+    sample_size: usize,
+    seed: c_uint,
+    huf_ctable: [*]usize,
+    of_ctable: [*]u32,
+    ml_ctable: [*]u32,
+    ll_ctable: [*]u32,
+) c_int;

@@ -49,6 +49,16 @@ Pushing: `main` and the review branch go to
 - std's decoder takes no dictionaries, so frames made with a dictionary or a
   prefix round-trip through the original's decoder only.
 
+## Open points for review
+
+- The optimal parser keeps upstream's asserts that a dictionary's Huffman
+  codes are at most 11 bits and its FSE costs under 10 when it prices from
+  the dictionary's tables. A hand-made dictionary that breaks them panics in a
+  safe build, where upstream's release build carries on (the Huffman case is
+  undefined behaviour in C). Dictionaries from the trainer satisfy both.
+- `BlockTest.create` (test-only) panics on an empty block; compression never
+  runs a block compressor on one.
+
 ## Frame and one-shot compression
 
 | original | zig-zstd | state |
@@ -71,15 +81,17 @@ Pushing: `main` and the review branch go to
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| levels 1 to 22, the default level (3), level 0 | `clevels.zig` | not started |
-| negative levels (`ZSTD_minCLevel` = -131072) | `fast` with target length | not started |
-| `ZSTD_fast` (`zstd_fast.c`), with dictMatchState and extDict | `fast.zig` | not started |
-| `ZSTD_dfast` (`zstd_double_fast.c`) | `double_fast.zig` | not started |
+| levels 1 to 22, the default level (3), level 0 | `clevels.zig` | oracle-tested (the table, against `ZSTD_getCParams`) |
+| negative levels (`ZSTD_minCLevel` = -131072) | `fast` with target length | oracle-tested per block (the table rows, and `fast` with target lengths up to 100) |
+| `ZSTD_fast` (`zstd_fast.c`), with dictMatchState and extDict | `fast.zig` | oracle-tested per block (frames wait for `compress.zig`) |
+| `ZSTD_dfast` (`zstd_double_fast.c`) | `double_fast.zig` | oracle-tested per block (frames wait for `compress.zig`) |
 | `ZSTD_greedy`, `ZSTD_lazy`, `ZSTD_lazy2` (hash chain) | `lazy.zig` | not started |
 | the row-based match finder (`useRowMatchFinder`), SSE2 and NEON tag compare | `lazy.zig`, `@Vector` | not started |
 | `ZSTD_btlazy2` (binary tree) | `lazy.zig` | not started |
 | dedicated dictionary search (`enableDedicatedDictSearch`) | `lazy.zig` | not started |
-| `ZSTD_btopt`, `ZSTD_btultra`, `ZSTD_btultra2` | `opt.zig` | not started |
+| `ZSTD_btopt`, `ZSTD_btultra`, `ZSTD_btultra2` (`zstd_opt.c`), with dictMatchState and extDict, btultra2's two passes over the first block | `opt.zig` | oracle-tested per block (`test/opt_test.zig`); frame-level tests wait for the frame path |
+| the optimal parser's price model: dictionary entropy tables, fixed prices for tiny blocks, literal compression off, statistics across blocks | `opt.zig` | oracle-tested per block |
+| long distance match candidates in the optimal parser (`ZSTD_optLdm_*`) | `opt.zig` | oracle-tested per block, on hand-made candidates; with `ldm.zig`'s once it lands |
 | long-distance matching (`zstd_ldm.c`) | `ldm.zig` | not started |
 | `ZSTD_getCParams`, `ZSTD_getParams`, `ZSTD_checkCParams`, `ZSTD_adjustCParams` | same | not started |
 
@@ -92,8 +104,8 @@ Pushing: `main` and the review branch go to
 | the FSE state encoder of `fse.h` (`FSE_initCState`, `FSE_initCState2`, `FSE_encodeSymbol`, `FSE_flushCState`, `FSE_getMaxNbBits`, `FSE_bitCost`) and the bit stream writer of `bitstream.h` | `fse_compress.zig`, `bitstream.zig` | oracle-tested |
 | Huffman: `HUF_optimalTableLog`, `HUF_buildCTable_wksp`, `HUF_writeCTable_wksp`, `HUF_compress1X_repeat`, `HUF_compress4X_repeat`, `HUF_compress1X_usingCTable`, `HUF_compress4X_usingCTable`, `HUF_readCTable`, `HUF_validateCTable` | `huf_compress.zig` | oracle-tested |
 | `FSE_readNCount`, `HUF_readStats` (dictionary loading) | `entropy_common.zig` | oracle-tested |
-| literals: raw, RLE, Huffman 1 and 4 streams, repeat table | `compress_literals.zig` | not started |
-| sequences: `ZSTD_selectEncodingType`, `ZSTD_buildCTable`, `ZSTD_encodeSequences` | `compress_sequences.zig` | not started |
+| literals: raw, RLE, Huffman 1 and 4 streams, repeat table | `compress_literals.zig` | oracle-tested (`ZSTD_compressLiterals` on real blocks' literals) |
+| sequences: `ZSTD_selectEncodingType`, `ZSTD_buildCTable`, `ZSTD_encodeSequences` | `compress_sequences.zig` | oracle-tested (each function, on real blocks' sequences) |
 
 ## Parameters (`ZSTD_CCtx_setParameter`, `ZSTD_CCtxParams_setParameter`)
 
@@ -133,7 +145,7 @@ Pushing: `main` and the review branch go to
 | --- | --- | --- |
 | `ZSTD_createCCtx`, `ZSTD_freeCCtx`, `ZSTD_createCCtx_advanced` (custom allocator) | `CCtx.create(gpa)`, `CCtx.destroy` | not started |
 | `ZSTD_initStaticCCtx`, `ZSTD_initStaticCStream`, `ZSTD_initStaticCDict` | `initStatic` | not started |
-| context reuse: tables kept between frames, workspace resize and shrink rules | `cwksp.zig` | not started |
+| context reuse: tables kept between frames, workspace resize and shrink rules | `cwksp.zig` | ported (the workspace; its use waits for `compress.zig`) |
 | `ZSTD_sizeof_CCtx`, `ZSTD_sizeof_CStream`, `ZSTD_sizeof_CDict` | same | not started |
 | `ZSTD_estimateCCtxSize*`, `ZSTD_estimateCStreamSize*`, `ZSTD_estimateCDictSize*` | same | not started |
 | `ZSTD_copyCCtx` | same | not started |
@@ -187,7 +199,7 @@ Pushing: `main` and the review branch go to
 | `ZSTD_NO_INTRINSICS`, `ZSTD_ARCH_X86_SSE2`, `ZSTD_ARCH_X86_AVX2`, `ZSTD_ARCH_ARM_NEON` | `-Dintrinsics`, the target's CPU features | not started |
 | `ZSTD_CLEVEL_DEFAULT` | `params.clevel_default` | not started |
 | `ZSTDMT_NBWORKERS_MAX`, `ZSTDMT_JOBSIZE_MIN` | constants in `zstdmt.zig` | not started |
-| `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY` | a build option for the tests | not started |
+| `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY` | a build option for the tests | ported (`build_options.overflow_correct_frequently`, always off: no `-D` flag yet) |
 
 ## Left out, awaiting the author's approval
 
