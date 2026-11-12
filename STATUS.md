@@ -61,8 +61,34 @@ zig build <step> -j3`, never while the scratchpad's `bench.running` exists.
 corpus runs.
 
 All porting branches (`port/*`) are merged into `main` and pushed. Steps 1 to 4 of the
-methodology are done. Step 5 (the performance pass) is on `review/perf-and-skeptic`;
-steps 6 (skeptic) and 7 (fixes) follow on the same branch, then step 8 (release).
+methodology are done (the step 4 report is above). The run stopped at the end of the
+author's session on 11 November, during step 5.
+
+**Where things are.**
+- `main`: the whole port, 298 of 298 tests passing with the corpora (`zig build test`,
+  28 minutes) and the benchmark tables in `doc/BENCHMARKS.md` (from before step 5).
+- `review/perf-and-skeptic`: `main` plus step 5's first change, `cc86709`: the
+  double-fast finder's range test on the long candidate is a conditional move on x86-64,
+  as upstream's inline-asm `ZSTD_selectAddr` is. Level 4 takes 11% less time; levels 3
+  and 1 are unchanged. The oracle tests pass on both builds.
+- `port/*`: the merged porting branches, kept for history.
+
+**To resume.**
+1. Step 5 on `review/perf-and-skeptic`, by a fresh agent: level 3 (dfast) is still about
+   9% to 10% slower on whole files, level 1 (fast) a steady 5.6% slower, levels 5, 7 and 8
+   (row matcher) 3% to 6% slower; nothing located yet. `perf` is blocked by
+   `perf_event_paranoid` on this machine, so a profile needs the author to lower it.
+   The dfast loop's labeled `switch`/`continue` compiles to table jumps where upstream has
+   direct gotos (not measured). The bench's `port_multithread_merged` switch
+   (bench/bench.zig) can now be set to true, since the streaming MT path is merged. Rerun
+   `zig build bench` at the end and replace the tables in `doc/BENCHMARKS.md`.
+2. Step 6, a fresh skeptic agent on the same branch, with the open points below as a
+   start: upstream asserts that safe builds turn into panics on caller-supplied
+   dictionaries and sequences, the two upstream out-of-bounds reads the stream tests avoid,
+   the Io requirement for workers, the static-context deviations.
+3. Step 7, fixes with failing-first tests; the full suite and the benchmark again.
+4. README.md (layout in the gameplan's `port-readme.md`, with the author's notice wording
+   and "N% faster/slower" headline rows), `doc/TESTING.md`, `doc/parity.md`; then step 8.
 
 Pushing: `main` and the review branch go to
 `git@github.com:farhollowgames/zig-zstd.git`, fast-forward only.
