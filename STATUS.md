@@ -74,7 +74,7 @@ author's session on 11 November, during step 5.
 - `port/*`: the merged porting branches, kept for history.
 
 **The second performance pass** (`review/perf-2`, worktree `zig-zstd.wt/perf2`), as of
-00:20 on 12 November:
+02:00 on 12 November:
 - Profiling works: `perf record -e cycles:u` (user-mode events pass `perf_event_paranoid`
   2; only kernel events are blocked). In a profile of the bench, `bench` is the port and
   `libzstd_reference.so` the original, so `perf report --sort dso,sym` compares them
@@ -94,6 +94,18 @@ author's session on 11 November, during step 5.
   The search loop left with the next step as a value, and the dispatch on it compiled to
   jump tables (23 indirect jumps) with the live values on the stack. Level 3 1.038 to
   1.006 and 0.999 (two passes), level 4 1.057 to 1.041.
+- Kept: the bench turns transparent huge pages off for its process; `--huge-pages` leaves
+  them as the system has them and `--original-first` lets the original allocate first.
+  With them on, which side's tables got huge pages followed where malloc placed each
+  context: level 4 went from 1.038 to 0.960 when the original allocated first, and a
+  rebuilt original moved its own levels 5 to 8 by 6%. With them off the order changes
+  nothing and the L1 TLB misses split evenly between the sides.
+- Kept: the bench's original is upstream's shared library build (`benchReferenceLibrary`
+  in build.zig, -fPIC -fvisibility=hidden); the tests keep theirs. The original's times
+  did not move (within 0.5%). Every ratio from then on is against it with huge pages
+  off: level 1 1.04, level 3 1.015, levels 4 to 8 0.99 to 1.01. Time only while core 6
+  and its sibling 22 are idle: other sessions' test runs share the machine, and a busy
+  sibling inflates a run by half.
 - Level 1 (fast): the search loop compiles to the same 51 instructions per two positions
   as the original's, and the function runs as many instructions; the gap is in cycles,
   not yet explained. Levels 5 to 8 (row matcher): the port runs no more instructions

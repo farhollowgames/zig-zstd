@@ -57,9 +57,10 @@ const port_multithread_merged = false;
 const workers = 4;
 const levels_multithread = [_]i32{ 3, 19 };
 
-/// What the original is built with, as `referenceLibrary` in build.zig has it.
+/// What the original is built with, as `benchReferenceLibrary` in build.zig has it.
 const original_flags = "-O3 -std=c99 -DXXH_NAMESPACE=ZSTD_ -DZSTD_MULTITHREAD " ++
-    "-DZSTD_LEGACY_SUPPORT=0 -fno-sanitize=undefined, plus huf_decompress_amd64.S on x86_64";
+    "-DZSTD_LEGACY_SUPPORT=0 -fno-sanitize=undefined -fPIC -fvisibility=hidden, " ++
+    "plus huf_decompress_amd64.S on x86_64, as a shared library on glibc";
 
 const Options = struct {
     levels: []const i32 = &levels_default,
