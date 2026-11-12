@@ -111,15 +111,26 @@ each order:
   bandwidth, which the benchmark cannot see.
 - Where the code sits moved rows by up to 3% before the third performance
   pass: a loop that straddles a 4 KiB page boundary misses in this CPU's
-  instruction cache on nearly every pass (in one build the level-1 fast
-  loop crossed one and missed 194 million times, against 15 million in a
-  build where it did not, for the same instructions). The port's
-  inner-loop functions are now page-aligned, and `-Dbench-code-shift=N`
-  moves the port's code to test it: at shifts 0, 16 and 1360, each row
-  from -5 to 15 stayed within 1.2% of itself, most within 0.8% (levels 1 and 2 at
-  1.007 to 1.012, levels 5 to 9 at 0.992 to 1.006). The original is a
+  instruction cache far more often (in one build the level-1 fast loop
+  crossed one and missed 194 million times, against 15 million in a build
+  where it did not, for the same instructions). The port's inner-loop
+  functions are now page-aligned, and `-Dbench-code-shift=N` moves the
+  port's code to test it: at shifts 0, 16 and 1360, each row from -5 to 15
+  stayed within 1.2% of itself, most within 0.8% (levels 1 and 2 at 1.007
+  to 1.012, levels 5 to 9 at 0.992 to 1.006). The shifts move whole
+  functions, not the code inside an aligned one, so this holds for this
+  code as compiled here, not for every later change: several hot functions
+  are over 4 KiB (the lazy block compressors, the Huffman 1X coder), whose
+  loops could straddle a page after a change, and the double-fast
+  no-dictionary variant sits 59 bytes under a page. The original is a
   shared library and stays put, with whatever its build gives it: its row
   search at levels 5 to 9 takes misses of the same size in this build.
+- Ratios move by about 1 to 1.5 points between runs of the same binary on
+  different occasions (level 6 1.002 in one pass and 1.010 in the table
+  above, level 4 0.984 and 0.994). The rows from 16 to 22 came out 1 to 1.4
+  points faster for the port than in the second pass's table; that pass and
+  this one did not change their code, so that move is the run's, not this
+  pass's.
 - The original's calls into the C library go through the PLT, as in a
   distribution's libzstd.so. The port's calls to memcpy, memmove and memset go
   to Zig's own, in compiler_rt.
@@ -129,10 +140,10 @@ each order:
 - Levels 1 and 2 (fast): 1.1% and 1.2% slower, at every placement tried;
   level -1 0.6% slower. The fast block compressor's variants are
   functions of their own, so that each starts on a page of its own, and
-  compiled that way their loop runs about 5% more instructions than when
-  they were inlined into one function as the original's are (more
-  spills of loop invariants): 19.99 against 19.41 billion instructions at
-  level 1, both sides together. The inlined version was 0.1% faster to
+  compiled that way their loop runs about 10% more instructions than
+  when they were inlined into one function as the original's are (more
+  spills of loop invariants), and the port as a whole about 6% more at
+  level 1 (from an instruction profile of the port's side alone). The inlined version was 0.1% faster to
   2.2% slower depending on where it landed.
 - Level 6: 1.0% slower in this run; 1.001 to 1.005 at the three
   placements above. Levels 5 and 7 to 9 are even or within noise.

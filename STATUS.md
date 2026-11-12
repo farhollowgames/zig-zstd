@@ -309,14 +309,18 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
   buildSequencesStatistics. The fast and double-fast variants are noinline functions of
   their own (under 4 KiB each), where they were inlined into one dispatcher. Levels 5 to 9
   0.99 to 1.006 at every placement (before 1.011 to 1.027), level 1 1.007 to 1.010 (before
-  1.018), levels 3 and 4 within 1% of before. Cost: 225 KB of padding in the text (1.24 to 1.47 MB
-  in the bench binary), never fetched.
-- Left slower: levels -5, -1 and 2 lose 0.5% to 2% against the build before (-1 0.982 to
-  1.005, 2 1.005 to 1.010), and levels 1 and 2 stay about 1% slower than the original at
-  every placement. The split-out fast variants compile to about 5% more instructions in
-  their loop than the inlined ones (more spills of loop invariants; 19.99 against 19.41
-  billion instructions at level 1, both sides). Padding a variant's entry by 16, 32 or 48
-  bytes moved level 1 by under 0.6%, so it is not the loop's place in a cache line.
+  1.018), levels 3 and 4 within 1% of before. Cost: 225 KB of padding in the text of the
+  ReleaseFast bench binary for x86-64 (1.24 to 1.47 MB), never fetched; ReleaseSmall
+  builds leave the functions unaligned (`hot_code_align` is 1 there).
+- Left slower (every ratio is the port's time over the original's): levels -5, -1 and 2
+  lose 0.5% to 2% against the build before (-5 0.994 before, 1.000 to 1.006 at the three
+  placements; -1 0.982 before, 1.004 to 1.006; 2 1.005 before, 1.009 to 1.012), and
+  levels 1 and 2 stay about 1% slower than the original at every placement. The split-out
+  fast variants compile to about 10% more instructions in their loop than the inlined
+  ones (more spills of loop invariants), and the port's side runs about 6% more
+  instructions at level 1 (an instruction profile of the port's code alone). Padding a
+  variant's entry by 16, 32 or 48 bytes moved level 1 by under 0.6%, so it is not the
+  loop's place in a cache line.
 - Tried and dropped: page-aligning the fast dispatcher with the variants inlined (level 1
   1.018: its loop crosses the page at offset 16 KiB), and entry padding in the fast
   variants (above).
@@ -355,6 +359,10 @@ Pushing: `main` and the review branch go to
 
 ## Open points for review
 
+- Left out, not yet put to the author: WebAssembly targets. Zig rejects function
+  alignment on wasm, so `hot_code_align` (third performance pass) does not compile
+  there; `main` already fails on wasm32 before it, at `compress.zig:310` (found in the
+  third pass's review). Neither is fixed.
 - The optimal parser keeps upstream's asserts that a dictionary's Huffman
   codes are at most 11 bits and its FSE costs under 10 when it prices from
   the dictionary's tables. A hand-made dictionary that breaks them panics in a

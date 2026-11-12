@@ -111,16 +111,21 @@ pinned to one core:
 | feature | port vs original |
 | --- | ---: |
 | level -1, whole files | 0.6% slower |
-| level 1, whole files | 1% slower |
+| levels 1 and 2, whole files | 1.1% and 1.2% slower |
 | level 3 (the default), whole files | 0.7% faster |
-| levels 5 to 9, 2 MiB of each file | 0.6% faster to 1% slower |
-| level 19, 2 MiB of each file | 4% faster |
-| level 22, 2 MiB of each file | 3% faster |
+| levels 5 to 9, 2 MiB of each file | 0.6% faster to 1.0% slower |
+| level 19, 2 MiB of each file | 3.9% faster |
+| level 22, 2 MiB of each file | 3.2% faster |
 
 AMD Ryzen 9 9950X3D, Zig 0.17.0 ReleaseFast against the original at `-O3`
 with upstream's shared-library flags, both for `znver5`; the median of five
 runs (three from level 16), with transparent huge pages off for the benchmark.
 The compressed sizes are the same at every level, since the frames are.
+Rows move by about 1 to 1.5 points between runs; levels 19 and 22 came out
+faster than in the previous table because the run did, not because their code
+changed. The functions that run the inner loops are aligned to 4 KiB pages,
+tuned on this one Zen 5 machine, which adds about 216 to 225 KB of padding to
+a binary in every mode but ReleaseSmall.
 
 - [`doc/TESTING.md`](doc/TESTING.md): how the tests compare the port with
   the original, and what this repository's tests cover.
