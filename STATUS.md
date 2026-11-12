@@ -58,24 +58,40 @@ Pushing: `main` and the review branch go to
   undefined behaviour in C). Dictionaries from the trainer satisfy both.
 - `BlockTest.create` (test-only) panics on an empty block; compression never
   runs a block compressor on one.
+- With long distance matching on and `ldmMinMatch` unset,
+  `ZSTD_estimateCCtxSize_usingCCtxParams` and `ZSTD_estimateCStreamSize_usingCCtxParams`
+  divide by zero: the original dies with SIGFPE, the port panics in a safe
+  build. The estimates skip `ZSTD_ldm_adjustParameters`, which fills it in.
+- An `ldmHashRateLog` over the window log makes the original's long distance
+  hash log its maximum, 30: an 8 GiB table, even for an empty input. The
+  port does the same.
+- `initStatic` over a workspace a few bytes larger than the context: the
+  original's space check wraps, and it returns a context without its block
+  states, which crashes on first use. The port returns null.
+- A static context cannot compress with a dictionary loaded by reference:
+  `ZSTD_initLocalDict` digests it into a `CDict`, which the original mallocs
+  even for a static context, and the port refuses with
+  `error.MemoryAllocation` (both refuse a copy at load time).
+- `CCtx.generateSequences` takes an allocator for its scratch frame, where the
+  original mallocs it.
 
 ## Frame and one-shot compression
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| `ZSTD_compress` | `compress` | not started |
-| `ZSTD_compressBound`, `ZSTD_COMPRESSBOUND` | `compressBound` | not started |
-| `ZSTD_compressCCtx` | `CCtx.compressCCtx` | not started |
-| `ZSTD_compress2` | `CCtx.compress2` | not started |
-| `ZSTD_compress_advanced` | `CCtx.compressAdvanced` | not started |
-| `ZSTD_writeSkippableFrame` | `writeSkippableFrame` | not started |
-| `ZSTD_minCLevel`, `ZSTD_maxCLevel`, `ZSTD_defaultCLevel` | same | not started |
+| `ZSTD_compress` | `compress` | oracle-tested |
+| `ZSTD_compressBound`, `ZSTD_COMPRESSBOUND` | `compressBound` | oracle-tested |
+| `ZSTD_compressCCtx` | `CCtx.compressCCtx` | oracle-tested |
+| `ZSTD_compress2` | `CCtx.compress2` | oracle-tested (single-threaded; with workers it stops with a panic until zstdmt lands) |
+| `ZSTD_compress_advanced` | `CCtx.compressAdvanced` | oracle-tested |
+| `ZSTD_writeSkippableFrame` | `writeSkippableFrame` | oracle-tested |
+| `ZSTD_minCLevel`, `ZSTD_maxCLevel`, `ZSTD_defaultCLevel` | same | oracle-tested |
 | `ZSTD_versionNumber`, `ZSTD_versionString` | `params.version_number`, `params.version_string` | not started |
 | `ZSTD_isError`, `ZSTD_getErrorCode`, `ZSTD_getErrorName` | `Error`, `errorCode` | not started |
-| frame header: magic, window descriptor, content size, dictionary id, single segment | in `compress.zig` | not started |
-| checksum (XXH64) | `std.hash.XxHash64` | not started |
-| raw, RLE and compressed blocks; last-block flag | in `compress.zig` | not started |
-| `ZSTD_f_zstd1_magicless` | `Format.zstd1_magicless` | not started |
+| frame header: magic, window descriptor, content size, dictionary id, single segment | in `compress.zig` | oracle-tested |
+| checksum (XXH64) | `std.hash.XxHash64` | oracle-tested |
+| raw, RLE and compressed blocks; last-block flag | in `compress.zig` | oracle-tested |
+| `ZSTD_f_zstd1_magicless` | `Format.zstd1_magicless` | oracle-tested |
 
 ## Levels and strategies
 
@@ -83,17 +99,17 @@ Pushing: `main` and the review branch go to
 | --- | --- | --- |
 | levels 1 to 22, the default level (3), level 0 | `clevels.zig` | oracle-tested (the table, against `ZSTD_getCParams`) |
 | negative levels (`ZSTD_minCLevel` = -131072) | `fast` with target length | oracle-tested per block (the table rows, and `fast` with target lengths up to 100) |
-| `ZSTD_fast` (`zstd_fast.c`), with dictMatchState and extDict | `fast.zig` | oracle-tested per block (frames wait for `compress.zig`) |
-| `ZSTD_dfast` (`zstd_double_fast.c`) | `double_fast.zig` | oracle-tested per block (frames wait for `compress.zig`) |
+| `ZSTD_fast` (`zstd_fast.c`), with dictMatchState and extDict | `fast.zig` | oracle-tested per block and in frames |
+| `ZSTD_dfast` (`zstd_double_fast.c`) | `double_fast.zig` | oracle-tested per block and in frames |
 | `ZSTD_greedy`, `ZSTD_lazy`, `ZSTD_lazy2` (hash chain) | `lazy.zig` | not started |
 | the row-based match finder (`useRowMatchFinder`), SSE2 and NEON tag compare | `lazy.zig`, `@Vector` | not started |
 | `ZSTD_btlazy2` (binary tree) | `lazy.zig` | not started |
 | dedicated dictionary search (`enableDedicatedDictSearch`) | `lazy.zig` | not started |
-| `ZSTD_btopt`, `ZSTD_btultra`, `ZSTD_btultra2` (`zstd_opt.c`), with dictMatchState and extDict, btultra2's two passes over the first block | `opt.zig` | oracle-tested per block (`test/opt_test.zig`); frame-level tests wait for the frame path |
+| `ZSTD_btopt`, `ZSTD_btultra`, `ZSTD_btultra2` (`zstd_opt.c`), with dictMatchState and extDict, btultra2's two passes over the first block | `opt.zig` | oracle-tested per block (`test/opt_test.zig`) and in frames |
 | the optimal parser's price model: dictionary entropy tables, fixed prices for tiny blocks, literal compression off, statistics across blocks | `opt.zig` | oracle-tested per block |
 | long distance match candidates in the optimal parser (`ZSTD_optLdm_*`) | `opt.zig` | oracle-tested per block, on hand-made candidates; with `ldm.zig`'s once it lands |
 | long-distance matching (`zstd_ldm.c`) | `ldm.zig` | not started |
-| `ZSTD_getCParams`, `ZSTD_getParams`, `ZSTD_checkCParams`, `ZSTD_adjustCParams` | same | not started |
+| `ZSTD_getCParams`, `ZSTD_getParams`, `ZSTD_checkCParams`, `ZSTD_adjustCParams` | same | oracle-tested |
 
 ## Entropy coding
 
@@ -111,44 +127,44 @@ Pushing: `main` and the review branch go to
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| `ZSTD_c_compressionLevel` | `.compression_level` | not started |
-| `ZSTD_c_windowLog`, `hashLog`, `chainLog`, `searchLog`, `minMatch`, `targetLength`, `strategy` | same names | not started |
-| `ZSTD_c_targetCBlockSize` (superblocks, `zstd_compress_superblock.c`) | `.target_cblock_size` | not started |
-| `ZSTD_c_enableLongDistanceMatching`, `ldmHashLog`, `ldmMinMatch`, `ldmBucketSizeLog`, `ldmHashRateLog` | same names | not started |
-| `ZSTD_c_contentSizeFlag`, `checksumFlag`, `dictIDFlag` | same names | not started |
-| `ZSTD_c_nbWorkers`, `jobSize`, `overlapLog`, `rsyncable` | same names | not started |
-| `ZSTD_c_format` | `.format` | not started |
-| `ZSTD_c_forceMaxWindow`, `forceAttachDict` | same names | not started |
-| `ZSTD_c_literalCompressionMode` | `.literal_compression_mode` | not started |
-| `ZSTD_c_srcSizeHint` | `.src_size_hint` | not started |
-| `ZSTD_c_enableDedicatedDictSearch` | same | not started |
-| `ZSTD_c_stableInBuffer`, `stableOutBuffer` | same | not started |
-| `ZSTD_c_blockDelimiters`, `validateSequences` | same | not started |
-| `ZSTD_c_blockSplitterLevel`, `splitAfterSequences` (post-split, `ZSTD_compressBlock_splitBlock`) and the pre-splitter (`zstd_preSplit.c`) | same, `pre_split.zig` | not started |
-| `ZSTD_c_useRowMatchFinder` | same | not started |
-| `ZSTD_c_deterministicRefPrefix` | same | not started |
-| `ZSTD_c_prefetchCDictTables` | same | not started |
-| `ZSTD_c_enableSeqProducerFallback` | same | not started |
-| `ZSTD_c_maxBlockSize` | same | not started |
-| `ZSTD_c_repcodeResolution` (`searchForExternalRepcodes`) | same | not started |
-| `ZSTD_cParam_getBounds` | `cParamGetBounds` | not started |
-| `ZSTD_CCtx_getParameter`, `ZSTD_CCtxParams_getParameter` | same | not started |
-| `ZSTD_CCtx_setCParams`, `setFParams`, `setParams` | same | not started |
-| `ZSTD_createCCtxParams`, `freeCCtxParams`, `CCtxParams_reset`, `_init`, `_init_advanced` | `CCtxParams` | not started |
-| `ZSTD_CCtx_setParametersUsingCCtxParams` | same | not started |
-| `ZSTD_CCtx_setPledgedSrcSize` | same | not started |
-| `ZSTD_CCtx_reset` (session, parameters, both) | `CCtx.reset` | not started |
+| `ZSTD_c_compressionLevel` | `.compression_level` | oracle-tested |
+| `ZSTD_c_windowLog`, `hashLog`, `chainLog`, `searchLog`, `minMatch`, `targetLength`, `strategy` | same names | oracle-tested |
+| `ZSTD_c_targetCBlockSize` (superblocks, `zstd_compress_superblock.c`) | `.target_cblock_size` | oracle-tested |
+| `ZSTD_c_enableLongDistanceMatching`, `ldmHashLog`, `ldmMinMatch`, `ldmBucketSizeLog`, `ldmHashRateLog` | same names | oracle-tested |
+| `ZSTD_c_contentSizeFlag`, `checksumFlag`, `dictIDFlag` | same names | oracle-tested |
+| `ZSTD_c_nbWorkers`, `jobSize`, `overlapLog`, `rsyncable` | same names | bounds, set and get oracle-tested; workers wait for zstdmt (inputs up to the minimum job size compress single-threaded, oracle-tested) |
+| `ZSTD_c_format` | `.format` | oracle-tested |
+| `ZSTD_c_forceMaxWindow`, `forceAttachDict` | same names | oracle-tested |
+| `ZSTD_c_literalCompressionMode` | `.literal_compression_mode` | oracle-tested |
+| `ZSTD_c_srcSizeHint` | `.src_size_hint` | oracle-tested |
+| `ZSTD_c_enableDedicatedDictSearch` | same | oracle-tested |
+| `ZSTD_c_stableInBuffer`, `stableOutBuffer` | same | set and get oracle-tested; their buffers wait for streaming |
+| `ZSTD_c_blockDelimiters`, `validateSequences` | same | set and get oracle-tested; used by `compressSequences` (streaming branch) |
+| `ZSTD_c_blockSplitterLevel`, `splitAfterSequences` (post-split, `ZSTD_compressBlock_splitBlock`) and the pre-splitter (`zstd_preSplit.c`) | same, `pre_split.zig` | oracle-tested |
+| `ZSTD_c_useRowMatchFinder` | same | oracle-tested |
+| `ZSTD_c_deterministicRefPrefix` | same | oracle-tested |
+| `ZSTD_c_prefetchCDictTables` | same | set and get oracle-tested (no effect on the output) |
+| `ZSTD_c_enableSeqProducerFallback` | same | oracle-tested |
+| `ZSTD_c_maxBlockSize` | same | oracle-tested |
+| `ZSTD_c_repcodeResolution` (`searchForExternalRepcodes`) | same | oracle-tested |
+| `ZSTD_cParam_getBounds` | `cParamGetBounds` | oracle-tested |
+| `ZSTD_CCtx_getParameter`, `ZSTD_CCtxParams_getParameter` | same | oracle-tested |
+| `ZSTD_CCtx_setCParams`, `setFParams`, `setParams` | same | oracle-tested |
+| `ZSTD_createCCtxParams`, `freeCCtxParams`, `CCtxParams_reset`, `_init`, `_init_advanced` | `CCtxParams` | oracle-tested |
+| `ZSTD_CCtx_setParametersUsingCCtxParams` | same | oracle-tested |
+| `ZSTD_CCtx_setPledgedSrcSize` | same | oracle-tested |
+| `ZSTD_CCtx_reset` (session, parameters, both) | `CCtx.reset` | oracle-tested |
 
 ## Contexts and memory
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| `ZSTD_createCCtx`, `ZSTD_freeCCtx`, `ZSTD_createCCtx_advanced` (custom allocator) | `CCtx.create(gpa)`, `CCtx.destroy` | not started |
-| `ZSTD_initStaticCCtx`, `ZSTD_initStaticCStream`, `ZSTD_initStaticCDict` | `initStatic` | not started |
-| context reuse: tables kept between frames, workspace resize and shrink rules | `cwksp.zig` | ported (the workspace; its use waits for `compress.zig`) |
-| `ZSTD_sizeof_CCtx`, `ZSTD_sizeof_CStream`, `ZSTD_sizeof_CDict` | same | not started |
-| `ZSTD_estimateCCtxSize*`, `ZSTD_estimateCStreamSize*`, `ZSTD_estimateCDictSize*` | same | not started |
-| `ZSTD_copyCCtx` | same | not started |
+| `ZSTD_createCCtx`, `ZSTD_freeCCtx`, `ZSTD_createCCtx_advanced` (custom allocator) | `CCtx.create(gpa)`, `CCtx.destroy` | oracle-tested |
+| `ZSTD_initStaticCCtx`, `ZSTD_initStaticCStream`, `ZSTD_initStaticCDict` | `initStatic` | oracle-tested for `CCtx` and `CDict`; `initStaticCStream` waits for streaming |
+| context reuse: tables kept between frames, workspace resize and shrink rules | `cwksp.zig` | oracle-tested (many frames on one context, changing parameters, resets) |
+| `ZSTD_sizeof_CCtx`, `ZSTD_sizeof_CStream`, `ZSTD_sizeof_CDict` | same | oracle-tested for `CCtx` and `CDict`; `sizeof_CStream` waits for streaming |
+| `ZSTD_estimateCCtxSize*`, `ZSTD_estimateCStreamSize*`, `ZSTD_estimateCDictSize*` | same | oracle-tested |
+| `ZSTD_copyCCtx` | same | oracle-tested |
 
 ## Streaming
 
@@ -159,30 +175,30 @@ Pushing: `main` and the review branch go to
 | `ZSTD_createCStream`, `freeCStream`, `CStreamInSize`, `CStreamOutSize` | `CCtx`, same sizes | not started |
 | `ZSTD_initCStream`, `_srcSize`, `_usingDict`, `_advanced`, `_usingCDict`, `_usingCDict_advanced`, `ZSTD_resetCStream` | same | not started |
 | `ZSTD_compressStream`, `ZSTD_flushStream`, `ZSTD_endStream` | same | not started |
-| `ZSTD_getFrameProgression`, `ZSTD_toFlushNow` | same | not started |
-| buffer-less: `ZSTD_compressBegin*`, `ZSTD_compressContinue`, `ZSTD_compressEnd`, `ZSTD_getBlockSize`, `ZSTD_compressBlock` | same | not started |
+| `ZSTD_getFrameProgression`, `ZSTD_toFlushNow` | same | ported (single-threaded), not tested |
+| buffer-less: `ZSTD_compressBegin*`, `ZSTD_compressContinue`, `ZSTD_compressEnd`, `ZSTD_getBlockSize`, `ZSTD_compressBlock` | same | oracle-tested |
 
 ## Dictionaries
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| `ZSTD_compress_usingDict` | same | not started |
-| `ZSTD_CCtx_loadDictionary`, `_byReference`, `_advanced` (raw content, full dictionary, auto) | same | not started |
-| `ZSTD_CCtx_refPrefix`, `refPrefix_advanced` | same | not started |
-| `ZSTD_createCDict`, `freeCDict`, `_advanced`, `_advanced2`, `_byReference` | `CDict` | not started |
-| `ZSTD_compress_usingCDict`, `_usingCDict_advanced`, `ZSTD_CCtx_refCDict` | same | not started |
-| attach, copy and load of a CDict (`forceAttachDict`) | in `compress.zig` | not started |
-| entropy tables from a full dictionary (`ZSTD_loadCEntropy`) | in `compress.zig` | not started |
-| `ZSTD_getDictID_fromDict`, `ZSTD_getDictID_fromCDict` | same | not started |
+| `ZSTD_compress_usingDict` | same | oracle-tested |
+| `ZSTD_CCtx_loadDictionary`, `_byReference`, `_advanced` (raw content, full dictionary, auto) | same | oracle-tested |
+| `ZSTD_CCtx_refPrefix`, `refPrefix_advanced` | same | oracle-tested |
+| `ZSTD_createCDict`, `freeCDict`, `_advanced`, `_advanced2`, `_byReference` | `CDict` | oracle-tested |
+| `ZSTD_compress_usingCDict`, `_usingCDict_advanced`, `ZSTD_CCtx_refCDict` | same | oracle-tested |
+| attach, copy and load of a CDict (`forceAttachDict`) | in `compress.zig` | oracle-tested |
+| entropy tables from a full dictionary (`ZSTD_loadCEntropy`) | in `compress.zig` | oracle-tested |
+| `ZSTD_getDictID_fromDict`, `ZSTD_getDictID_fromCDict` | same | `getDictId` of a `CDict` oracle-tested; `ZSTD_getDictID_fromDict` is not ported |
 
 ## Sequences
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| `ZSTD_sequenceBound`, `ZSTD_generateSequences`, `ZSTD_mergeBlockDelimiters` | same | not started |
-| `ZSTD_compressSequences` (with and without delimiters, validation) | same | not started |
+| `ZSTD_sequenceBound`, `ZSTD_generateSequences`, `ZSTD_mergeBlockDelimiters` | same | oracle-tested |
+| `ZSTD_compressSequences` (with and without delimiters, validation) | same | not started (streaming branch); `validateSequence` and the delimited transfer are ported |
 | `ZSTD_compressSequencesAndLiterals` (AVX2 conversion path) | same | not started |
-| `ZSTD_registerSequenceProducer`, `ZSTD_CCtxParams_registerSequenceProducer` (external match finders, fallback) | `SequenceProducer` | not started |
+| `ZSTD_registerSequenceProducer`, `ZSTD_CCtxParams_registerSequenceProducer` (external match finders, fallback) | `SequenceProducer` | oracle-tested |
 
 ## Multithreading
 
