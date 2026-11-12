@@ -22,6 +22,7 @@ pub const internal = struct {
     pub const fse_compress = @import("compress/fse_compress.zig");
     pub const hist = @import("compress/hist.zig");
     pub const huf_compress = @import("compress/huf_compress.zig");
+    pub const opt = @import("compress/opt.zig");
 };
 
 test {
@@ -39,4 +40,5 @@ test {
     _ = @import("compress/fse_compress.zig");
     _ = @import("compress/hist.zig");
     _ = @import("compress/huf_compress.zig");
+    _ = @import("compress/opt.zig");
 }
