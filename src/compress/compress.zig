@@ -2407,7 +2407,10 @@ fn copyCCtxInternal(
 /// `ZSTD_copyCCtx`: makes `dst_cctx` ready to compress a frame of
 /// `pledged_src_size` (0 for unknown) with `src_cctx`'s parameters,
 /// dictionary and tables. `src_cctx` must be between `compressBegin*` and
-/// its first `compressContinue`.
+/// its first `compressContinue`. The copy refers to the dictionary
+/// `src_cctx` began with, until the copy's frame ends: the buffer given to
+/// `compressBeginUsingDict` or `compressBeginAdvanced`, or the `CDict` and
+/// its content given to `compressBeginUsingCDict*`.
 pub fn copyCCtx(dst_cctx: *CCtx, src_cctx: *const CCtx, pledged_src_size_in: u64) Error!void {
     var fparams: params.FrameParameters = .{
         .content_size_flag = true,

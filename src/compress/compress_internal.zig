@@ -132,7 +132,8 @@ pub const LocalDict = struct {
     /// The context's own copy of the dictionary, when loaded by copy.
     dict_buffer: ?[*]u8 = null,
     /// The dictionary: `dict_buffer`, or the caller's buffer when loaded by
-    /// reference, valid until the dictionary is replaced or the context reset.
+    /// reference, valid until the dictionary is replaced or the context's
+    /// parameters are reset; a session reset keeps it.
     dict: ?[*]const u8 = null,
     dict_size: usize = 0,
     dict_content_type: params.DictContentType = .auto,
@@ -880,7 +881,8 @@ pub const CCtx = struct {
     expected_out_buffer_size: usize = 0,
 
     local_dict: LocalDict = .{},
-    /// A dictionary the caller owns, valid until it is unset or the context reset.
+    /// A dictionary the caller owns, valid until it is unset or replaced, or
+    /// the context's parameters are reset; a session reset keeps it.
     cdict: ?*const CDict = null,
     /// A dictionary for one frame only.
     prefix_dict: PrefixDict = .{},

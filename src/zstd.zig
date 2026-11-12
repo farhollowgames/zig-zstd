@@ -34,6 +34,9 @@ const pool = @import("common/pool.zig");
 /// `refCDict`, `refPrefix*`) or the context destroyed; a prefix until the
 /// next frame is compressed; the `src` of `compressContinue` and
 /// `compressBlock` until the frame ends, as later blocks may match into it;
+/// the dictionary given to `compressBeginUsingDict`, `compressBeginAdvanced`
+/// or `compressBeginUsingCDict*` until the frame ends, and for a context
+/// made from that one by `copy`, until the copy's frame ends;
 /// a static context's workspace for the context's whole life; with
 /// `stable_in_buffer`, a stream's input buffer until its frame ends; a
 /// thread pool and an `Io` until the context is destroyed, even after
