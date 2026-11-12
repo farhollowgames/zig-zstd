@@ -6,8 +6,9 @@
 //! `ZSTD_CCtx_init_compressStream2` resolves them, and copied to the port's
 //! one by one. Every frame must be the same as the original's on every run,
 //! whatever the threads' timing, and so must every value that does not
-//! depend on the timing: the sizes after the start of a frame, the frame
-//! progression whenever no job is in progress, and the errors.
+//! depend on the timing: the sizes after the start of a frame (unless a
+//! frame was abandoned before it), the frame progression whenever no job is
+//! in progress, and the errors.
 
 const std = @import("std");
 const zstd = @import("zstd");
@@ -92,7 +93,7 @@ const Case = struct {
 /// depend on the threads' timing.
 const Observed = struct {
     /// The size of the context and the input size hint, right after the
-    /// first frame started.
+    /// first frame started; the size stays 0 after an abandoned frame.
     sizeof_after_init: usize = 0,
     hint_after_init: usize = 0,
     /// The frame progression after each flush and at the end of a frame.
@@ -437,7 +438,8 @@ fn compressFrame(side: anytype, case: *const Case, out: *Output, observed: *Obse
         },
     }
     if (first) {
-        observed.sizeof_after_init = side.sizeof();
+        // An abandoned frame's jobs leave the pools at sizes that depend on timing, upstream too.
+        if (case.abandon_after == null) observed.sizeof_after_init = side.sizeof();
         observed.hint_after_init = side.nextInputSizeHint();
     }
     const s = case.script;

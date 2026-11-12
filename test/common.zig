@@ -115,6 +115,8 @@ pub fn expectStdDecodes(frame: []const u8, expected: []const u8) !void {
 /// The caller frees them.
 pub fn generated(size: usize, match_proba: f64, lit_proba: f64, seed: u32) ![]u8 {
     const buffer = try gpa.alloc(u8, size);
+    // The generator writes its first byte even for an empty buffer.
+    if (size == 0) return buffer;
     c.reference_genBuffer(buffer.ptr, size, match_proba, lit_proba, seed);
     return buffer;
 }

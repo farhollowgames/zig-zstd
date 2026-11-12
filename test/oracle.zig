@@ -32,6 +32,15 @@ test "the harness: the original's frames decode through std and the original" {
     try std.testing.expect(golden.len > 0);
 }
 
+test "the harness: generated data of 0 and 1 bytes" {
+    const empty = try common.generated(0, 0.5, 0.3, 7);
+    defer common.gpa.free(empty);
+    try std.testing.expectEqual(0, empty.len);
+    const one = try common.generated(1, 0.5, 0.3, 7);
+    defer common.gpa.free(one);
+    try std.testing.expectEqual(1, one.len);
+}
+
 test {
     _ = @import("core_test.zig");
     _ = @import("entropy_test.zig");
