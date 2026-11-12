@@ -1490,7 +1490,10 @@ fn sizeofMatchState(
     else
         0;
     const h3_size: usize = if (hash_log3 != 0) @as(usize, 1) << @intCast(hash_log3) else 0;
-    const table_space = chain_size * @sizeOf(u32) + h_size * @sizeOf(u32) + h3_size * @sizeOf(u32);
+    // On a 32-bit target, tables past the address space wrap these sizes,
+    // as the original's size_t sums do; resetMatchState then refuses them.
+    const table_space = chain_size *% @sizeOf(u32) +% h_size *% @sizeOf(u32) +%
+        h3_size *% @sizeOf(u32);
     const opt_potential_space =
         cwksp.aligned64AllocSize((zstd_internal.max_ml + 1) * @sizeOf(u32)) +
         cwksp.aligned64AllocSize((zstd_internal.max_ll + 1) * @sizeOf(u32)) +
@@ -1512,7 +1515,7 @@ fn sizeofMatchState(
     comptime assert(params.hash_log_min >= 4 and params.window_log_min >= 4 and
         params.chain_log_min >= 4);
     assert(use_row_match_finder != .auto);
-    return table_space + opt_space + slack_space + lazy_additional_space;
+    return table_space +% opt_space +% slack_space +% lazy_additional_space;
 }
 
 /// `ZSTD_maxNbSeq`: the most sequences a block can have, a tighter bound
@@ -1566,8 +1569,10 @@ fn estimateCCtxSizeUsingCCtxParamsInternal(
     else
         0;
 
-    return cctx_space + tmp_work_space + block_state_space + ldm_space + ldm_seq_space +
-        match_state_size + token_space + buffer_space + external_seq_space;
+    // Wraps on a 32-bit target with tables past the address space, as the
+    // original's sum does.
+    return cctx_space +% tmp_work_space +% block_state_space +% ldm_space +% ldm_seq_space +%
+        match_state_size +% token_space +% buffer_space +% external_seq_space;
 }
 
 /// `ZSTD_estimateCCtxSize_usingCCtxParams`: the size of a static context
@@ -1834,9 +1839,13 @@ fn resetMatchState(
 
     ws.clearTables();
 
+    // A table past the address space (a hash log of 30 on a 32-bit target)
+    // is refused. The original's size wraps to 0 there, and it writes past
+    // its workspace.
+    const h_bytes = std.math.mul(usize, h_size, @sizeOf(u32)) catch return error.MemoryAllocation;
     // A failed reservation leaves its pointer unset, as the failure is
     // checked once for all three.
-    ms.hash_table = @ptrCast(ws.reserveTable(h_size * @sizeOf(u32)) orelse undefined);
+    ms.hash_table = @ptrCast(ws.reserveTable(h_bytes) orelse undefined);
     ms.chain_table = @ptrCast(ws.reserveTable(chain_size * @sizeOf(u32)) orelse undefined);
     ms.hash_table3 = @ptrCast(ws.reserveTable(h3_size * @sizeOf(u32)) orelse undefined);
     if (ws.reserveFailed()) return error.MemoryAllocation;
@@ -2037,8 +2046,12 @@ fn resetCCtxInternal(
     // The long distance matcher's hash table.
     if (cctx_params.ldm_params.enable_ldm == .enable) {
         const ldm_h_size = @as(usize, 1) << @intCast(cctx_params.ldm_params.hash_log);
-        const table = ws.reserveAligned64(ldm_h_size * @sizeOf(ci.LdmEntry));
-        if (table) |t| @memset(t[0 .. ldm_h_size * @sizeOf(ci.LdmEntry)], 0);
+        // Refused past the address space (a hash log of 29 or 30 on a 32-bit
+        // target), where the original's size wraps to 0.
+        const ldm_bytes = std.math.mul(usize, ldm_h_size, @sizeOf(ci.LdmEntry)) catch
+            return error.MemoryAllocation;
+        const table = ws.reserveAligned64(ldm_bytes);
+        if (table) |t| @memset(t[0..ldm_bytes], 0);
         zc.ldm_state.hash_table = @ptrCast(table orelse undefined);
         zc.ldm_sequences = @ptrCast(
             ws.reserveAligned64(max_nb_ldm_seq * @sizeOf(ci.RawSeq)) orelse undefined,
@@ -5212,9 +5225,9 @@ pub fn estimateCDictSizeAdvanced(
 ) usize {
     // Sized for the dedicated dictionary search, which with the row-based
     // match finder takes more.
-    return cwksp.allocSize(cdict_object_size) +
-        cwksp.allocSize(huf.workspace_size) +
-        sizeofMatchState(&cparams, resolveRowMatchFinderMode(.auto, &cparams), true, false) +
+    return cwksp.allocSize(cdict_object_size) +%
+        cwksp.allocSize(huf.workspace_size) +%
+        sizeofMatchState(&cparams, resolveRowMatchFinderMode(.auto, &cparams), true, false) +%
         cdictContentSpace(dict_size, dict_load_method);
 }
 

@@ -229,7 +229,7 @@ pub const Cwksp = struct {
         const alloc = ws.table_end;
         assert(bytes & (@sizeOf(u32) - 1) == 0);
         ws.assertInternalConsistency();
-        if (@intFromPtr(alloc) + bytes > @intFromPtr(ws.alloc_start)) {
+        if (bytes > @intFromPtr(ws.alloc_start) - @intFromPtr(alloc)) {
             ws.alloc_failed = true;
             return null;
         }

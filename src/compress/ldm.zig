@@ -163,8 +163,10 @@ pub fn getTableSize(ldm_params: LdmParams) usize {
     const ldm_h_size = @as(usize, 1) << @intCast(ldm_params.hash_log);
     const ldm_bucket_size_log = @min(ldm_params.bucket_size_log, ldm_params.hash_log);
     const ldm_bucket_size = @as(usize, 1) << @intCast(ldm_params.hash_log - ldm_bucket_size_log);
-    const total_size = cwksp.allocSize(ldm_bucket_size) +
-        cwksp.allocSize(ldm_h_size * @sizeOf(LdmEntry));
+    // Wraps on a 32-bit target with a hash log of 29 or 30, as the
+    // original's size does; the context's reset refuses such a table.
+    const total_size = cwksp.allocSize(ldm_bucket_size) +%
+        cwksp.allocSize(ldm_h_size *% @sizeOf(LdmEntry));
     return if (ldm_params.enable_ldm == .enable) total_size else 0;
 }
 

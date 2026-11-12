@@ -44,6 +44,15 @@ Decompression is left to Zig's standard library (`std.compress.zstd`).
   unset, `estimateCCtxSizeUsingCCtxParams` and
   `estimateCStreamSizeUsingCCtxParams` divide by zero, as the original's do:
   the original dies with SIGFPE, the port panics in a safe build.
+- **Tables past a 32-bit address space.** On a 32-bit target, a hash log of
+  30 (a 4 GiB table) or a long distance hash log of 29 or 30 with long
+  distance matching on wraps the original's size_t table size to 0, and the
+  largest tables together wrap its sums. The estimates return the same
+  wrapped values as the original's. Compressing, the port refuses such
+  tables with `error.MemoryAllocation`. Where only the sum wraps, the
+  original's workspace check refuses them too, unless its pointer sum wraps
+  at the top of the address space. Where a table's own size wraps, the
+  original reserves no room for it and writes past its workspace.
 - **The AVX2 sequence conversion.** The original's `convertSequences` takes
   its AVX2 path whenever `__AVX2__` is defined, even with
   `ZSTD_NO_INTRINSICS`; the port takes its vector path only with the

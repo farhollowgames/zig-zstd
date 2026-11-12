@@ -142,8 +142,13 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
       bounds on 32-bit, and the original's size_t sums wrap to a workspace too small for
       its tables; the port's estimate panics with an integer overflow
       (`estimateCCtxSizeUsingCCtxParamsInternal`, from `setParameter, getParameter:
-      every parameter over its bounds`). Upstream's own limit; the test should skip
-      those values on 32-bit, once what the original returns there is known.
+      every parameter over its bounds`, at a long distance hash log of 29 with long
+      distance matching off, whose unused table size overflowed). **Fixed**: the
+      estimates wrap as the original's do and return its values (`estimate: the largest
+      table logs, past a 32-bit address space`); compressing with a table whose own size
+      wraps, where the original reserves no room for it and writes past its workspace,
+      the port refuses with `error.MemoryAllocation` (`compressStream2: tables past a
+      32-bit address space are refused`, port only), noted in `doc/parity.md`.
     - `initStatic: workspaces of the estimated size, and one byte less` fails an
       `expect` with no output (likely a workspace of the level-22 estimate that a
       32-bit process cannot allocate twice); not yet looked into.

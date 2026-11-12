@@ -691,6 +691,98 @@ test "estimate: every level, fuzzed compression parameters" {
     }
 }
 
+test "estimate: the largest table logs, past a 32-bit address space" {
+    // On a 32-bit target, a hash log of 30, a long distance hash log of 29
+    // or 30, and the sums of the largest tables wrap the original's sizes;
+    // the port's estimates wrap the same way.
+    const upper = struct {
+        fn of(param: CParameter) u32 {
+            return @intCast(upstreamBounds(param).upper);
+        }
+    }.of;
+    const window_log = upper(.window_log);
+    for (1..10) |strategy| {
+        for ([_]u32{ 3, 4 }) |min_match| {
+            const cp: params.CompressionParameters = .{
+                .window_log = window_log,
+                .chain_log = upper(.chain_log),
+                .hash_log = upper(.hash_log),
+                .search_log = 1,
+                .min_match = min_match,
+                .target_length = 0,
+                .strategy = @fromBackingInt(@as(u32, @intCast(strategy))),
+            };
+            const ccp = frame.toC(cp);
+            try testing.expectEqual(
+                c.ZSTD_estimateCCtxSize_usingCParams(ccp),
+                zstd.estimateCCtxSizeUsingCParams(cp),
+            );
+            try testing.expectEqual(
+                c.ZSTD_estimateCStreamSize_usingCParams(ccp),
+                zstd.estimateCStreamSizeUsingCParams(cp),
+            );
+            for ([_]params.DictLoadMethod{ .by_copy, .by_ref }) |method| {
+                try testing.expectEqual(
+                    c.ZSTD_estimateCDictSize_advanced(1000, ccp, @backingInt(method)),
+                    zstd.estimateCDictSizeAdvanced(1000, cp, method),
+                );
+            }
+        }
+    }
+    for ([_]u32{ upper(.ldm_hash_log) - 1, upper(.ldm_hash_log) }) |ldm_hash_log| {
+        const held = try ParamsPair.init();
+        defer held.deinit();
+        try held.set(.window_log, @intCast(window_log));
+        try held.set(.enable_long_distance_matching, 1);
+        try held.set(.ldm_hash_log, @intCast(ldm_hash_log));
+        try held.set(.ldm_min_match, 64);
+        try expectSameResult(
+            c.ZSTD_estimateCCtxSize_usingCCtxParams(held.upstream),
+            zstd.estimateCCtxSizeUsingCCtxParams(held.port),
+        );
+        try expectSameResult(
+            c.ZSTD_estimateCStreamSize_usingCCtxParams(held.upstream),
+            zstd.estimateCStreamSizeUsingCCtxParams(held.port),
+        );
+    }
+}
+
+test "compressStream2: tables past a 32-bit address space are refused" {
+    // The original's wrapped sizes give it tables smaller than it indexes,
+    // and it writes past its workspace; the port refuses them, as its
+    // workspace checks refuse a table that does not fit. 64-bit targets
+    // have room for these tables.
+    if (@sizeOf(usize) > 4) return error.SkipZigTest;
+    const src = try common.generated(10_000, 0.5, 0.3, 62);
+    defer gpa.free(src);
+    const cases = [_][]const common.Param{
+        // A hash table of 4 GiB.
+        &.{.{ .param = 102, .value = 30 }},
+        &.{ .{ .param = 101, .value = 30 }, .{ .param = 102, .value = 30 } },
+        // Long distance hash tables of 4 and 8 GiB.
+        &.{ .{ .param = 160, .value = 1 }, .{ .param = 161, .value = 29 } },
+        &.{ .{ .param = 160, .value = 1 }, .{ .param = 161, .value = 30 } },
+        // Tables of 2 GiB each, whose sum with the window's buffer wraps.
+        &.{
+            .{ .param = 101, .value = 30 }, .{ .param = 102, .value = 29 },
+            .{ .param = 103, .value = 29 }, .{ .param = 107, .value = 6 },
+        },
+    };
+    for (cases, 0..) |case, i| {
+        errdefer std.debug.print("case {d}\n", .{i});
+        const cctx = try zstd.CCtx.create(gpa);
+        defer cctx.destroy() catch unreachable;
+        for (case) |p| _ = try cctx.setParameter(@fromBackingInt(p.param), p.value);
+        var out: [1000]u8 = undefined;
+        var output: zstd.OutBuffer = .{ .dst = &out };
+        var input: zstd.InBuffer = .{ .src = src };
+        try testing.expectError(
+            error.MemoryAllocation,
+            cctx.compressStream2(&output, &input, .@"continue"),
+        );
+    }
+}
+
 test "sizeof: a context after frames at every level" {
     const src = try common.generated(300_000, 0.5, 0.3, 59);
     defer gpa.free(src);
