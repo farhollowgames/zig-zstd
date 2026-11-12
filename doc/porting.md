@@ -10,8 +10,8 @@ produces the same bytes. These are the rules every file follows.
 | --- | --- |
 | `common/zstd_internal.h` | `src/common/zstd_internal.zig` (constants and code tables) |
 | `common/fse.h`, `common/huf.h` | `src/common/fse.zig`, `src/common/huf.zig` (constants, table sizes) |
-| `common/bitstream.h` (writer) | `src/common/bitstream.zig` |
-| `common/entropy_common.c` | `src/common/entropy_common.zig` (`FSE_readNCount`, `HUF_readStats`, for dictionaries) |
+| `common/bitstream.h` (writer, and the reader the weight decoder needs) | `src/common/bitstream.zig` |
+| `common/entropy_common.c`, `common/fse_decompress.c` | `src/common/entropy_common.zig` (`FSE_readNCount`, `HUF_readStats` and the FSE decoder of compressed Huffman weights, for dictionaries) |
 | `common/error_private.h`, `zstd_errors.h` | `src/error.zig` |
 | `common/xxhash.h` | `std.hash.XxHash64` |
 | `common/pool.c`, `threading.c` | `src/common/pool.zig` |
