@@ -30,6 +30,7 @@ const opt = @import("opt.zig");
 const ldm = @import("ldm.zig");
 const compress_superblock = @import("compress_superblock.zig");
 const pre_split = @import("pre_split.zig");
+const zstdmt = @import("zstdmt.zig");
 
 const assert = std.debug.assert;
 const Cwksp = cwksp.Cwksp;
@@ -464,6 +465,10 @@ fn sizeofLocalDict(dict: ci.LocalDict) usize {
 fn freeCCtxContent(cctx: *CCtx) void {
     assert(cctx.static_size == 0);
     clearAllDicts(cctx);
+    if (build_options.multithread) {
+        if (cctx.mtctx) |mtctx| mtctx.free();
+        cctx.mtctx = null;
+    }
     cctx.workspace.free(cctx.custom_mem.?);
 }
 
@@ -479,8 +484,8 @@ pub fn freeCCtx(cctx: *CCtx) Error!void {
 
 /// `ZSTD_sizeof_mtctx`: the multithreaded context's size, for `sizeofCCtx`.
 fn sizeofMtctx(cctx: *const CCtx) usize {
-    _ = cctx;
-    return 0;
+    if (!build_options.multithread) return 0;
+    return zstdmt.ZstdmtCCtx.sizeof(cctx.mtctx);
 }
 
 /// `ZSTD_sizeof_CCtx`, `ZSTD_sizeof_CStream`: the memory the context uses,
@@ -1705,7 +1710,7 @@ pub fn estimateCStreamSize(compression_level: i32) usize {
 /// read, compressed and written.
 pub fn getFrameProgression(cctx: *const CCtx) params.FrameProgression {
     if (build_options.multithread and cctx.applied_params.nb_workers > 0) {
-        @panic("multithreading not ported");
+        return cctx.mtctx.?.getFrameProgression();
     }
     const buffered = if (cctx.in_buff_size == 0) 0 else cctx.in_buff_pos - cctx.in_to_compress;
     assert(buffered <= params.block_size_max);
@@ -1724,7 +1729,7 @@ pub fn getFrameProgression(cctx: *const CCtx) params.FrameProgression {
 /// compression reports any.
 pub fn toFlushNow(cctx: *CCtx) usize {
     if (build_options.multithread and cctx.applied_params.nb_workers > 0) {
-        @panic("multithreading not ported");
+        return cctx.mtctx.?.toFlushNow();
     }
     return 0;
 }
