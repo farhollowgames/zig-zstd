@@ -23,6 +23,15 @@ zig build <step> -j3`, never while the scratchpad's `bench.running` exists.
 `zig build check` compiles everything; `zig build test -Dcorpus=false` skips the
 corpus runs.
 
+Work in progress is on branches, one per area, each in a worktree under
+`~/Projects/zig-zstd.wt/`: `port/entropy` (bitstream, hist, FSE, Huffman),
+`port/core` (shared types, workspace, levels, fast, dfast, literals,
+sequences, the per-block oracle driver), `port/lazy`, `port/opt`, `port/ldm`,
+and `port/frame` (zstd_compress.c up to the one-shot frame path, the
+superblock and the pre-splitter). They merge into `main` as each passes its
+tests. Still to start: the streaming half of zstd_compress.c (CDict, CStream,
+`compressStream2`, `compress2`, the sequence API), then zstdmt.
+
 Pushing: `main` and the review branch go to
 `git@github.com:farhollowgames/zig-zstd.git`, fast-forward only.
 
@@ -78,10 +87,11 @@ Pushing: `main` and the review branch go to
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| `HIST_count`, `HIST_countFast`, `_wksp` variants | `hist.zig` | not started |
-| FSE: `FSE_optimalTableLog`, `FSE_normalizeCount`, `FSE_writeNCount`, `FSE_buildCTable_wksp`, `FSE_buildCTable_rle`, `FSE_compress_usingCTable` | `fse_compress.zig` | not started |
-| Huffman: `HUF_optimalTableLog`, `HUF_buildCTable_wksp`, `HUF_writeCTable_wksp`, `HUF_compress1X_repeat`, `HUF_compress4X_repeat`, `HUF_compress1X_usingCTable`, `HUF_compress4X_usingCTable`, `HUF_readCTable`, `HUF_validateCTable` | `huf_compress.zig` | not started |
-| `FSE_readNCount`, `HUF_readStats` (dictionary loading) | `entropy_common.zig` | not started |
+| `HIST_count`, `HIST_countFast`, `_wksp` variants | `hist.zig` | oracle-tested |
+| FSE: `FSE_optimalTableLog`, `FSE_normalizeCount`, `FSE_writeNCount`, `FSE_buildCTable_wksp`, `FSE_buildCTable_rle`, `FSE_compress_usingCTable` | `fse_compress.zig` | oracle-tested |
+| the FSE state encoder of `fse.h` (`FSE_initCState`, `FSE_initCState2`, `FSE_encodeSymbol`, `FSE_flushCState`, `FSE_getMaxNbBits`, `FSE_bitCost`) and the bit stream writer of `bitstream.h` | `fse_compress.zig`, `bitstream.zig` | oracle-tested |
+| Huffman: `HUF_optimalTableLog`, `HUF_buildCTable_wksp`, `HUF_writeCTable_wksp`, `HUF_compress1X_repeat`, `HUF_compress4X_repeat`, `HUF_compress1X_usingCTable`, `HUF_compress4X_usingCTable`, `HUF_readCTable`, `HUF_validateCTable` | `huf_compress.zig` | oracle-tested |
+| `FSE_readNCount`, `HUF_readStats` (dictionary loading) | `entropy_common.zig` | oracle-tested |
 | literals: raw, RLE, Huffman 1 and 4 streams, repeat table | `compress_literals.zig` | not started |
 | sequences: `ZSTD_selectEncodingType`, `ZSTD_buildCTable`, `ZSTD_encodeSequences` | `compress_sequences.zig` | not started |
 
