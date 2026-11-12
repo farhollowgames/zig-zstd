@@ -48,4 +48,7 @@ test {
     // Multithreaded compression, unless the port is built without it.
     if (@typeInfo(zstd.internal.zstdmt.ZstdmtCCtx) != .@"opaque") _ = @import("mt_test.zig");
     _ = @import("frame_test.zig");
+    _ = @import("stream_test.zig");
+    _ = @import("compress_sequences_test.zig");
+    _ = @import("corpus_test.zig");
 }

@@ -62,12 +62,6 @@ pub const hash_log3_max = 17;
 /// `ZSTD_NO_CLEVEL`: parameters that come from no compression level.
 const no_clevel = 0;
 
-/// The original's `ZSTDMT_NBWORKERS_MAX`, `ZSTDMT_JOBSIZE_MIN` and
-/// `ZSTDMT_JOBSIZE_MAX`, from zstdmt_compress.h.
-pub const zstdmt_nbworkers_max: i32 = if (@sizeOf(usize) == 4) 64 else 256;
-pub const zstdmt_jobsize_min: i32 = 512 * kib;
-pub const zstdmt_jobsize_max: i32 = if (@sizeOf(usize) == 4) 512 * mib else 1024 * mib;
-
 /// `ZSTD_MAX_INPUT_SIZE`: the largest input `compressBound` takes.
 const max_input_size: usize = if (@sizeOf(usize) == 8) 0xFF00FF00FF00FF00 else 0xFF00FF00;
 
@@ -707,8 +701,8 @@ pub fn cParamGetBounds(param: params.CParameter) params.Bounds {
             .upper = @backingInt(params.strategy_max),
         },
         .content_size_flag, .checksum_flag, .dict_id_flag => flag,
-        .nb_workers => .{ .lower = 0, .upper = if (mt) zstdmt_nbworkers_max else 0 },
-        .job_size => .{ .lower = 0, .upper = if (mt) zstdmt_jobsize_max else 0 },
+        .nb_workers => .{ .lower = 0, .upper = if (mt) @intCast(zstdmt.nbworkers_max) else 0 },
+        .job_size => .{ .lower = 0, .upper = if (mt) @intCast(zstdmt.jobsize_max) else 0 },
         .overlap_log => if (mt)
             .{ .lower = params.overlap_log_min, .upper = params.overlap_log_max }
         else
@@ -921,7 +915,8 @@ pub fn cctxParamsSetParameter(
                 return 0;
             }
             // Raised to the smallest job size that is not the default.
-            if (value != 0 and value < zstdmt_jobsize_min) value = zstdmt_jobsize_min;
+            const jobsize_min: i32 = @intCast(zstdmt.jobsize_min);
+            if (value != 0 and value < jobsize_min) value = jobsize_min;
             value = cParamClampBounds(param, value);
             assert(value >= 0);
             cctx_params.job_size = @intCast(value);
@@ -1229,6 +1224,15 @@ pub fn cctxRefCDict(cctx: *CCtx, cdict: ?*const CDict) Error!void {
     // The local dictionary goes, to save memory.
     clearAllDicts(cctx);
     cctx.cdict = cdict;
+}
+
+/// The `Io` whose locks multithreaded compression takes, which must stay
+/// valid until the context is destroyed. A frame with workers needs one,
+/// or a thread pool (`refThreadPool`), whose `Io` serves then. It is taken
+/// when the multithreaded context is made, at the first such frame; a
+/// later call does not change that context's.
+pub fn cctxSetIo(cctx: *CCtx, io: std.Io) void {
+    cctx.io = io;
 }
 
 /// `ZSTD_CCtx_refThreadPool`: the pool multithreaded compressions run on;
@@ -1713,7 +1717,9 @@ pub fn getFrameProgression(cctx: *const CCtx) params.FrameProgression {
         return cctx.mtctx.?.getFrameProgression();
     }
     const buffered = if (cctx.in_buff_size == 0) 0 else cctx.in_buff_pos - cctx.in_to_compress;
-    assert(buffered <= params.block_size_max);
+    // One more than a block when the pledged size is a block, as the
+    // input target is then.
+    assert(buffered <= params.block_size_max + 1);
     return .{
         .ingested = cctx.consumed_src_size + buffered,
         .consumed = cctx.consumed_src_size,
@@ -5628,8 +5634,29 @@ pub fn compressUsingCDict(
 }
 
 // ---------------------------------------------------------------------------
-// One-shot compression with the advanced parameters
+// Streaming
 // ---------------------------------------------------------------------------
+
+/// `ZSTD_createCStream`, `ZSTD_createCStream_advanced`: a streaming
+/// context is a compression context.
+pub const createCStream = createCCtx;
+/// `ZSTD_initStaticCStream`.
+pub const initStaticCStream = initStaticCCtx;
+/// `ZSTD_freeCStream`.
+pub const freeCStream = freeCCtx;
+/// `ZSTD_sizeof_CStream`.
+pub const sizeofCStream = sizeofCCtx;
+
+/// `ZSTD_CStreamInSize`: the input size that fills one block.
+pub fn cStreamInSize() usize {
+    return params.block_size_max;
+}
+
+/// `ZSTD_CStreamOutSize`: an output size that always takes a whole
+/// block, its header and a checksum.
+pub fn cStreamOutSize() usize {
+    return compressBoundMacro(params.block_size_max) + block_header_size + 4;
+}
 
 /// `ZSTD_getCParamMode`: whether `cdict` is attached for a frame of
 /// `pledged_src_size`.
@@ -5644,9 +5671,352 @@ fn getCParamMode(
     return .no_attach_dict;
 }
 
+/// `ZSTD_resetCStream`: ends the frame in progress and pledges the next
+/// one's size, where 0 means unknown, as in the original.
+pub fn resetCStream(zcs: *CCtx, pss: u64) Error!void {
+    const pledged_src_size = if (pss == 0) params.content_size_unknown else pss;
+    try cctxReset(zcs, .session_only);
+    try cctxSetPledgedSrcSize(zcs, pledged_src_size);
+}
+
+/// `ZSTD_initCStream_internal`: starts a stream with `cctx_params`, whose
+/// compression parameters must be valid, and either a dictionary copied
+/// from `dict` or `cdict`, not both.
+pub fn initCStreamInternal(
+    zcs: *CCtx,
+    dict: ?[]const u8,
+    cdict: ?*const CDict,
+    cctx_params: *const CCtxParams,
+    pledged_src_size: u64,
+) Error!void {
+    try cctxReset(zcs, .session_only);
+    try cctxSetPledgedSrcSize(zcs, pledged_src_size);
+    assert(checkCParamsValid(cctx_params.cparams));
+    zcs.requested_params = cctx_params.*;
+    assert(dict == null or cdict == null);
+    if (dict) |d| {
+        try cctxLoadDictionary(zcs, d);
+    } else {
+        // No `cdict` clears the dictionary.
+        try cctxRefCDict(zcs, cdict);
+    }
+}
+
+/// `ZSTD_initCStream_usingCDict_advanced`: starts a stream with `cdict`,
+/// which must outlive it, and `fparams`.
+pub fn initCStreamUsingCDictAdvanced(
+    zcs: *CCtx,
+    cdict: ?*const CDict,
+    fparams: params.FrameParameters,
+    pledged_src_size: u64,
+) Error!void {
+    try cctxReset(zcs, .session_only);
+    try cctxSetPledgedSrcSize(zcs, pledged_src_size);
+    zcs.requested_params.fparams = fparams;
+    try cctxRefCDict(zcs, cdict);
+}
+
+/// `ZSTD_initCStream_usingCDict`: starts a stream with `cdict`, which
+/// must outlive it.
+pub fn initCStreamUsingCDict(zcs: *CCtx, cdict: ?*const CDict) Error!void {
+    try cctxReset(zcs, .session_only);
+    try cctxRefCDict(zcs, cdict);
+}
+
+/// `ZSTD_initCStream_advanced`: starts a stream with `parameters` and a
+/// dictionary copied from `dict` (none when empty). The pledged size must
+/// be exact; 0 means unknown when the content size flag is off.
+pub fn initCStreamAdvanced(
+    zcs: *CCtx,
+    dict: []const u8,
+    parameters: params.Parameters,
+    pss: u64,
+) Error!void {
+    const pledged_src_size = if (pss == 0 and !parameters.fparams.content_size_flag)
+        params.content_size_unknown
+    else
+        pss;
+    try cctxReset(zcs, .session_only);
+    try cctxSetPledgedSrcSize(zcs, pledged_src_size);
+    try checkCParams(parameters.cparams);
+    cctxParamsSetZstdParams(&zcs.requested_params, &parameters);
+    try cctxLoadDictionary(zcs, dict);
+}
+
+/// `ZSTD_initCStream_usingDict`: starts a stream at `compression_level`
+/// with a dictionary copied from `dict` (none when empty).
+pub fn initCStreamUsingDict(zcs: *CCtx, dict: []const u8, compression_level: i32) Error!void {
+    try cctxReset(zcs, .session_only);
+    _ = try cctxSetParameter(zcs, .compression_level, compression_level);
+    try cctxLoadDictionary(zcs, dict);
+}
+
+/// `ZSTD_initCStream_srcSize`: starts a stream at `compression_level`
+/// without a dictionary, pledging its size, where 0 means unknown.
+pub fn initCStreamSrcSize(zcs: *CCtx, compression_level: i32, pss: u64) Error!void {
+    const pledged_src_size = if (pss == 0) params.content_size_unknown else pss;
+    try cctxReset(zcs, .session_only);
+    try cctxRefCDict(zcs, null);
+    _ = try cctxSetParameter(zcs, .compression_level, compression_level);
+    try cctxSetPledgedSrcSize(zcs, pledged_src_size);
+}
+
+/// `ZSTD_initCStream`: starts a stream at `compression_level` without a
+/// dictionary.
+pub fn initCStream(zcs: *CCtx, compression_level: i32) Error!void {
+    try cctxReset(zcs, .session_only);
+    try cctxRefCDict(zcs, null);
+    _ = try cctxSetParameter(zcs, .compression_level, compression_level);
+}
+
+/// `ZSTD_nextInputSizeHint`: the input that would complete the block being
+/// gathered.
+fn nextInputSizeHint(cctx: *const CCtx) usize {
+    if (cctx.applied_params.in_buffer_mode == .stable) {
+        // Wraps, as in the original, while a stable input is held back
+        // before the first frame or past a smaller block size.
+        return cctx.block_size_max -% cctx.stable_in_not_consumed;
+    }
+    var hint_in_size = cctx.in_buff_target - cctx.in_buff_pos;
+    if (hint_in_size == 0) hint_in_size = cctx.block_size_max;
+    return hint_in_size;
+}
+
+/// `ZSTD_compressBound` where the original compares its result: an error
+/// is a size larger than any buffer.
+fn boundOrMax(src_size: usize) usize {
+    return compressBound(src_size) catch std.math.maxInt(usize);
+}
+
+/// `ZSTD_compressStream_generic`: the single-threaded stream. Gathers the
+/// input into blocks (or reads a stable input in place), compresses each
+/// block into the output, or into the context's buffer when the output may
+/// be too small, and flushes that buffer. `.flush` compresses what is
+/// gathered; `.end` also ends the frame. Returns a hint of the next input
+/// size, or 0 once the frame is complete. On an error, `input.pos` and
+/// `output.pos` are left as they were, but for a stable input's bytes held
+/// back, which are given back first.
+fn compressStreamGeneric(
+    zcs: *CCtx,
+    output: *params.OutBuffer,
+    input: *params.InBuffer,
+    flush_mode: params.EndDirective,
+) Error!usize {
+    const iend = input.src.len;
+    var ip = input.pos;
+    const oend = output.dst.len;
+    var op = output.pos;
+    var some_more_work = true;
+
+    if (zcs.applied_params.in_buffer_mode == .stable) {
+        assert(input.pos >= zcs.stable_in_not_consumed);
+        input.pos -= zcs.stable_in_not_consumed;
+        ip -= zcs.stable_in_not_consumed;
+        zcs.stable_in_not_consumed = 0;
+    }
+    if (zcs.applied_params.in_buffer_mode == .buffered) assert(zcs.in_buff_size > 0);
+    if (zcs.applied_params.out_buffer_mode == .buffered) assert(zcs.out_buff_size > 0);
+
+    while (some_more_work) {
+        stage: switch (zcs.stream_stage) {
+            .init => return error.InitMissing,
+            .load => {
+                if (flush_mode == .end and
+                    (oend - op >= boundOrMax(iend - ip) or
+                        // A stable output may take `error.DstSizeTooSmall`.
+                        zcs.applied_params.out_buffer_mode == .stable) and
+                    zcs.in_buff_pos == 0)
+                {
+                    // The whole frame straight into the output.
+                    const c_size = try compressEnd(zcs, output.dst[op..oend], input.src[ip..iend]);
+                    ip = iend;
+                    op += c_size;
+                    zcs.frame_ended = true;
+                    // A session reset cannot fail.
+                    cctxReset(zcs, .session_only) catch unreachable;
+                    some_more_work = false;
+                    break :stage;
+                }
+                if (zcs.applied_params.in_buffer_mode == .buffered) {
+                    // Fill the input buffer up to the block.
+                    const to_load = zcs.in_buff_target - zcs.in_buff_pos;
+                    const loaded = @min(to_load, iend - ip);
+                    @memcpy(zcs.in_buff[zcs.in_buff_pos..][0..loaded], input.src[ip..][0..loaded]);
+                    zcs.in_buff_pos += loaded;
+                    ip += loaded;
+                    if (flush_mode == .@"continue" and zcs.in_buff_pos < zcs.in_buff_target) {
+                        // Not a whole block yet.
+                        some_more_work = false;
+                        break :stage;
+                    }
+                    if (flush_mode == .flush and zcs.in_buff_pos == zcs.in_to_compress) {
+                        // Nothing to flush.
+                        some_more_work = false;
+                        break :stage;
+                    }
+                } else {
+                    assert(zcs.applied_params.in_buffer_mode == .stable);
+                    if (flush_mode == .@"continue" and iend - ip < zcs.block_size_max) {
+                        // Not a whole block yet: the input is reported
+                        // consumed, and read again at the next call.
+                        zcs.stable_in_not_consumed = iend - ip;
+                        ip = iend;
+                        some_more_work = false;
+                        break :stage;
+                    }
+                    if (flush_mode == .flush and ip == iend) {
+                        some_more_work = false;
+                        break :stage;
+                    }
+                }
+
+                // One block, which cannot be stopped halfway.
+                const input_buffered = zcs.applied_params.in_buffer_mode == .buffered;
+                const i_size = if (input_buffered)
+                    zcs.in_buff_pos - zcs.in_to_compress
+                else
+                    @min(iend - ip, zcs.block_size_max);
+                // Straight into the output when it surely fits, or when a
+                // stable output must; else into the buffer, then flushed.
+                const into_output = oend - op >= boundOrMax(i_size) or
+                    zcs.applied_params.out_buffer_mode == .stable;
+                const c_dst = if (into_output)
+                    output.dst[op..oend]
+                else
+                    zcs.out_buff[0..zcs.out_buff_size];
+                var c_size: usize = undefined;
+                if (input_buffered) {
+                    const last_block = flush_mode == .end and ip == iend;
+                    const block = zcs.in_buff[zcs.in_to_compress..][0..i_size];
+                    c_size = if (last_block)
+                        try compressEnd(zcs, c_dst, block)
+                    else
+                        try compressContinue(zcs, c_dst, block);
+                    zcs.frame_ended = last_block;
+                    // The next block, from the buffer's start when it
+                    // would not fit.
+                    zcs.in_buff_target = zcs.in_buff_pos + zcs.block_size_max;
+                    if (zcs.in_buff_target > zcs.in_buff_size) {
+                        zcs.in_buff_pos = 0;
+                        zcs.in_buff_target = zcs.block_size_max;
+                    }
+                    if (!last_block) assert(zcs.in_buff_target <= zcs.in_buff_size);
+                    zcs.in_to_compress = zcs.in_buff_pos;
+                } else {
+                    const last_block = flush_mode == .end and ip + i_size == iend;
+                    const block = input.src[ip..][0..i_size];
+                    c_size = if (last_block)
+                        try compressEnd(zcs, c_dst, block)
+                    else
+                        try compressContinue(zcs, c_dst, block);
+                    ip += i_size;
+                    zcs.frame_ended = last_block;
+                }
+                if (into_output) {
+                    op += c_size;
+                    if (zcs.frame_ended) {
+                        some_more_work = false;
+                        cctxReset(zcs, .session_only) catch unreachable;
+                    }
+                    break :stage;
+                }
+                zcs.out_buff_content_size = c_size;
+                zcs.out_buff_flushed_size = 0;
+                zcs.stream_stage = .flush;
+                continue :stage .flush;
+            },
+            .flush => {
+                assert(zcs.applied_params.out_buffer_mode == .buffered);
+                const to_flush = zcs.out_buff_content_size - zcs.out_buff_flushed_size;
+                const flushed = @min(oend - op, to_flush);
+                @memcpy(
+                    output.dst[op..][0..flushed],
+                    zcs.out_buff[zcs.out_buff_flushed_size..][0..flushed],
+                );
+                op += flushed;
+                zcs.out_buff_flushed_size += flushed;
+                if (to_flush != flushed) {
+                    // The output is full.
+                    assert(op == oend);
+                    some_more_work = false;
+                    break :stage;
+                }
+                zcs.out_buff_content_size = 0;
+                zcs.out_buff_flushed_size = 0;
+                if (zcs.frame_ended) {
+                    some_more_work = false;
+                    cctxReset(zcs, .session_only) catch unreachable;
+                    break :stage;
+                }
+                zcs.stream_stage = .load;
+            },
+        }
+    }
+
+    input.pos = ip;
+    output.pos = op;
+    if (zcs.frame_ended) return 0;
+    return nextInputSizeHint(zcs);
+}
+
+/// `ZSTD_nextInputSizeHint_MTorST`.
+fn nextInputSizeHintMTorST(cctx: *const CCtx) usize {
+    if (build_options.multithread and cctx.applied_params.nb_workers >= 1) {
+        return cctx.mtctx.?.nextInputSizeHint();
+    }
+    return nextInputSizeHint(cctx);
+}
+
+/// `ZSTD_compressStream`: `compressStream2` with `.continue`, returning a
+/// hint of the next input size.
+pub fn compressStream(
+    zcs: *CCtx,
+    output: *params.OutBuffer,
+    input: *params.InBuffer,
+) Error!usize {
+    _ = try compressStream2(zcs, output, input, .@"continue");
+    return nextInputSizeHintMTorST(zcs);
+}
+
+/// `ZSTD_setBufferExpectations`: the buffers the next call must pass in
+/// the stable modes.
+fn setBufferExpectations(
+    cctx: *CCtx,
+    output: *const params.OutBuffer,
+    input: *const params.InBuffer,
+) void {
+    if (cctx.applied_params.in_buffer_mode == .stable) cctx.expected_in_buffer = input.*;
+    if (cctx.applied_params.out_buffer_mode == .stable) {
+        cctx.expected_out_buffer_size = output.dst.len - output.pos;
+    }
+}
+
+/// `ZSTD_checkBufferStability`: whether the buffers are the ones the last
+/// call left, in the stable modes.
+fn checkBufferStability(
+    cctx: *const CCtx,
+    output: *const params.OutBuffer,
+    input: *const params.InBuffer,
+) Error!void {
+    if (cctx.applied_params.in_buffer_mode == .stable) {
+        const expect = cctx.expected_in_buffer;
+        if (expect.src.ptr != input.src.ptr or expect.pos != input.pos) {
+            return error.StabilityConditionNotRespected;
+        }
+    }
+    if (cctx.applied_params.out_buffer_mode == .stable) {
+        if (cctx.expected_out_buffer_size != output.dst.len - output.pos) {
+            return error.StabilityConditionNotRespected;
+        }
+    }
+}
+
 /// `ZSTD_CCtx_init_compressStream2`: starts a frame with the requested
 /// parameters and dictionaries; for `.end`, `in_size` becomes the pledged
-/// size. The prefix is used by this frame only.
+/// size. The prefix is used by this frame only. A frame with workers needs
+/// an allocator, so not a static context, and an `Io` (`CCtx.setIo`, or a
+/// referenced thread pool's): without one it fails with
+/// `error.ParameterCombinationUnsupported`.
 pub fn cctxInitCompressStream2(
     cctx: *CCtx,
     end_op: params.EndDirective,
@@ -5705,8 +6075,38 @@ pub fn cctxInitCompressStream2(
             return error.ParameterCombinationUnsupported;
         }
         // No threads for a small source.
-        if (cctx.pledged_src_size_plus_one -% 1 <= zstdmt_jobsize_min) cctx_params.nb_workers = 0;
-        if (cctx_params.nb_workers > 0) @panic("multithreading not ported");
+        if (cctx.pledged_src_size_plus_one -% 1 <= zstdmt.jobsize_min) cctx_params.nb_workers = 0;
+        if (cctx_params.nb_workers > 0) {
+            if (cctx.mtctx == null) {
+                const gpa = cctx.custom_mem orelse return error.MemoryAllocation;
+                const io = cctx.io orelse if (cctx.pool) |pool| pool.io else {
+                    return error.ParameterCombinationUnsupported;
+                };
+                cctx.mtctx = zstdmt.createCCtxAdvanced(
+                    @intCast(cctx_params.nb_workers),
+                    gpa,
+                    io,
+                    cctx.pool,
+                ) orelse return error.MemoryAllocation;
+            }
+            try cctx.mtctx.?.initCStreamInternal(
+                if (prefix_dict.dict) |d| d[0..prefix_dict.dict_size] else null,
+                prefix_dict.dict_content_type,
+                cctx.cdict,
+                cctx_params,
+                cctx.pledged_src_size_plus_one -% 1,
+            );
+            cctx.dict_id = if (cctx.cdict) |cdict| cdict.dict_id else 0;
+            cctx.dict_content_size = if (cctx.cdict) |cdict|
+                cdict.dict_content_size
+            else
+                prefix_dict.dict_size;
+            cctx.consumed_src_size = 0;
+            cctx.produced_csize = 0;
+            cctx.stream_stage = .load;
+            cctx.applied_params = cctx_params;
+            return;
+        }
     }
 
     const pledged_src_size = cctx.pledged_src_size_plus_one -% 1;
@@ -5739,27 +6139,937 @@ pub fn cctxInitCompressStream2(
     cctx.frame_ended = false;
 }
 
-/// `ZSTD_compress2` for a single thread: compresses `src` into one frame
-/// with the requested parameters and dictionaries, as `compressStream2`
-/// does with stable buffers and `.end`, which then compresses straight from
-/// `src` to `dst`. The streaming entry points are ported with the streaming
-/// part of the file.
+/// `ZSTD_compressStream2`: compresses from `input.src[input.pos..]` into
+/// `output.dst[output.pos..]`, moving both positions. `.continue` takes
+/// input and leaves the encoder free to hold it; `.flush` compresses all
+/// the input taken and flushes it, as far as the output allows; `.end`
+/// also ends the frame, and the next call starts a new one. Returns at
+/// least the bytes still to flush: 0 after a `.flush` or `.end` means it is
+/// done. The first call of a frame starts it with the parameters set then.
+///
+/// With `stable_in_buffer`, `input.src` must stay valid, unchanged, at the
+/// same address and with the same `pos` from one call to the next until the
+/// frame ends; with `stable_out_buffer`, `output.dst` must stay the same
+/// buffer with the same space after `pos`. A break of either promise fails
+/// with `error.StabilityConditionNotRespected`.
+pub fn compressStream2(
+    cctx: *CCtx,
+    output: *params.OutBuffer,
+    input: *params.InBuffer,
+    end_op: params.EndDirective,
+) Error!usize {
+    if (output.pos > output.dst.len) return error.DstSizeTooSmall;
+    if (input.pos > input.src.len) return error.SrcSizeWrong;
+
+    // The frame starts at the first call.
+    if (cctx.stream_stage == .init) {
+        const input_size = input.src.len - input.pos;
+        const total_input_size = input_size + cctx.stable_in_not_consumed;
+        if (cctx.requested_params.in_buffer_mode == .stable and end_op == .@"continue" and
+            total_input_size < params.block_size_max)
+        {
+            // Not a block yet: wait for more, or a flush, to pick the
+            // parameters from the size.
+            if (cctx.stable_in_not_consumed != 0) {
+                if (input.src.ptr != cctx.expected_in_buffer.src.ptr) {
+                    return error.StabilityConditionNotRespected;
+                }
+                if (input.pos != cctx.expected_in_buffer.src.len) {
+                    return error.StabilityConditionNotRespected;
+                }
+            }
+            // Reported consumed, and read again when the frame starts.
+            input.pos = input.src.len;
+            cctx.expected_in_buffer = input.*;
+            cctx.stable_in_not_consumed += input_size;
+            // At least the frame header is to come.
+            return params.frameHeaderSizeMin(cctx.requested_params.format);
+        }
+        try cctxInitCompressStream2(cctx, end_op, total_input_size);
+        setBufferExpectations(cctx, output, input);
+    }
+
+    try checkBufferStability(cctx, output, input);
+    if (build_options.multithread and cctx.applied_params.nb_workers > 0) {
+        return compressStream2Mt(cctx, output, input, end_op);
+    }
+    _ = try compressStreamGeneric(cctx, output, input, end_op);
+    setBufferExpectations(cctx, output, input);
+    return cctx.out_buff_content_size - cctx.out_buff_flushed_size;
+}
+
+/// The multithreaded half of `ZSTD_compressStream2`: `.continue` returns
+/// after any progress, `.flush` and `.end` once all is flushed or the
+/// output is full.
+fn compressStream2Mt(
+    cctx: *CCtx,
+    output: *params.OutBuffer,
+    input: *params.InBuffer,
+    end_op: params.EndDirective,
+) Error!usize {
+    const mtctx = cctx.mtctx.?;
+    if (cctx.cparams_changed) {
+        mtctx.updateCParamsWhileCompressing(&cctx.requested_params);
+        cctx.cparams_changed = false;
+    }
+    if (cctx.stable_in_not_consumed != 0) {
+        assert(cctx.applied_params.in_buffer_mode == .stable);
+        // The input held back before the frame started.
+        assert(input.pos >= cctx.stable_in_not_consumed);
+        input.pos -= cctx.stable_in_not_consumed;
+        cctx.stable_in_not_consumed = 0;
+    }
+    var flush_min: usize = undefined;
+    while (true) {
+        const ipos = input.pos;
+        const opos = output.pos;
+        const result = mtctx.compressStreamGeneric(output, input, end_op);
+        cctx.consumed_src_size += input.pos - ipos;
+        cctx.produced_csize += output.pos - opos;
+        flush_min = result catch |err| {
+            cctxReset(cctx, .session_only) catch unreachable;
+            return err;
+        };
+        // The frame is complete.
+        if (end_op == .end and flush_min == 0) cctxReset(cctx, .session_only) catch unreachable;
+
+        if (end_op == .@"continue") {
+            // Some progress is enough.
+            if (input.pos != ipos or output.pos != opos or input.pos == input.src.len or
+                output.pos == output.dst.len) break;
+        } else {
+            if (flush_min == 0 or output.pos == output.dst.len) break;
+        }
+    }
+    setBufferExpectations(cctx, output, input);
+    return flush_min;
+}
+
+/// `ZSTD_compressStream2_simpleArgs`: `compressStream2` on `dst` and `src`
+/// from the positions `dst_pos` and `src_pos`, which it moves.
+pub fn compressStream2SimpleArgs(
+    cctx: *CCtx,
+    dst: []u8,
+    dst_pos: *usize,
+    src: []const u8,
+    src_pos: *usize,
+    end_op: params.EndDirective,
+) Error!usize {
+    var output: params.OutBuffer = .{ .dst = dst, .pos = dst_pos.* };
+    var input: params.InBuffer = .{ .src = src, .pos = src_pos.* };
+    const result = compressStream2(cctx, &output, &input, end_op);
+    dst_pos.* = output.pos;
+    src_pos.* = input.pos;
+    return result;
+}
+
+/// `ZSTD_compress2`: compresses `src` into one frame with the requested
+/// parameters and dictionaries, as `compressStream2` with `.end` and
+/// stable buffers, so a single-threaded frame goes straight from `src` to
+/// `dst`. Ends any frame in progress first.
 pub fn compress2(cctx: *CCtx, dst: []u8, src: []const u8) Error!usize {
     const original_in_buffer_mode = cctx.requested_params.in_buffer_mode;
     const original_out_buffer_mode = cctx.requested_params.out_buffer_mode;
     cctxReset(cctx, .session_only) catch unreachable;
     cctx.requested_params.in_buffer_mode = .stable;
     cctx.requested_params.out_buffer_mode = .stable;
-    defer {
-        cctx.requested_params.in_buffer_mode = original_in_buffer_mode;
-        cctx.requested_params.out_buffer_mode = original_out_buffer_mode;
+    var o_pos: usize = 0;
+    var i_pos: usize = 0;
+    const result = compressStream2SimpleArgs(cctx, dst, &o_pos, src, &i_pos, .end);
+    cctx.requested_params.in_buffer_mode = original_in_buffer_mode;
+    cctx.requested_params.out_buffer_mode = original_out_buffer_mode;
+
+    // Not complete: the output is too small.
+    if (try result != 0) {
+        assert(o_pos == dst.len);
+        return error.DstSizeTooSmall;
     }
-    try cctxInitCompressStream2(cctx, .end, src.len);
-    const c_size = try compressEnd(cctx, dst, src);
-    cctx.frame_ended = true;
-    // As `compressStream2` leaves the context after a whole frame.
-    cctxReset(cctx, .session_only) catch unreachable;
+    assert(i_pos == src.len);
+    return o_pos;
+}
+
+// ---------------------------------------------------------------------------
+// Sequences from the caller
+// ---------------------------------------------------------------------------
+
+/// `ZSTD_validateSequence`: whether a sequence `pos_in_src` bytes into the
+/// frame has an offset the decoder can reach and a long enough match.
+fn validateSequence(
+    off_base: u32,
+    match_length: u32,
+    min_match_param: u32,
+    pos_in_src: usize,
+    window_log: u32,
+    dict_size: usize,
+    use_sequence_producer: bool,
+) Error!void {
+    const window_size = @as(u32, 1) << @intCast(window_log);
+    // Until the output reaches the window size, offsets reach into the
+    // dictionary, even beyond the window size; then, the window size.
+    const offset_bound: usize =
+        if (pos_in_src > window_size) window_size else pos_in_src + dict_size;
+    const match_len_lower_bound: u32 = if (min_match_param == 3 or use_sequence_producer) 3 else 4;
+    if (off_base > offset_bound + rep_num) return error.ExternalSequencesInvalid;
+    if (match_length < match_len_lower_bound) return error.ExternalSequencesInvalid;
+}
+
+/// `ZSTD_finalizeOffBase`: the off_base of a raw offset, a repeat code
+/// where it matches one.
+fn finalizeOffBase(raw_offset: u32, rep: *const [rep_num]u32, ll0: u32) u32 {
+    var off_base = ci.offsetToOffbase(raw_offset);
+    if (ll0 == 0 and raw_offset == rep[0]) {
+        off_base = ci.repcode1_to_offbase;
+    } else if (raw_offset == rep[1]) {
+        off_base = ci.repcodeToOffbase(2 - ll0);
+    } else if (raw_offset == rep[2]) {
+        off_base = ci.repcodeToOffbase(3 - ll0);
+    } else if (ll0 != 0 and raw_offset == rep[0] -% 1) {
+        off_base = ci.repcode3_to_offbase;
+    }
+    return off_base;
+}
+
+/// `ZSTD_transferSequences_wBlockDelim`: stores the sequences of
+/// `in_seqs` from `seq_pos` to the next block delimiter, whose literals end
+/// the block of `src`. Their lengths must add up to `src.len`. Returns
+/// `src.len`.
+fn transferSequencesWBlockDelim(
+    cctx: *CCtx,
+    seq_pos: *ci.SequencePosition,
+    in_seqs: []const Sequence,
+    src: []const u8,
+    external_rep_search: ParamSwitch,
+) Error!usize {
+    var idx: u32 = seq_pos.idx;
+    const start_idx = idx;
+    var ip = src.ptr;
+    const iend = src.ptr + src.len;
+    var updated_repcodes: ci.Repcodes = .{ .rep = cctx.block_state.prev_cblock.rep };
+    const dict_size: u32 = if (cctx.cdict) |cdict|
+        @intCast(cdict.dict_content_size)
+    else if (cctx.prefix_dict.dict != null)
+        @intCast(cctx.prefix_dict.dict_size)
+    else
+        0;
+
+    while (idx < in_seqs.len and (in_seqs[idx].match_length != 0 or
+        in_seqs[idx].offset != 0)) : (idx += 1)
+    {
+        const lit_length = in_seqs[idx].lit_length;
+        const match_length = in_seqs[idx].match_length;
+        var off_base: u32 = undefined;
+
+        if (external_rep_search == .disable) {
+            off_base = ci.offsetToOffbase(in_seqs[idx].offset);
+        } else {
+            const ll0: u32 = @intFromBool(lit_length == 0);
+            off_base = finalizeOffBase(in_seqs[idx].offset, &updated_repcodes.rep, ll0);
+            ci.updateRep(&updated_repcodes.rep, off_base, ll0);
+        }
+
+        if (cctx.applied_params.validate_sequences) {
+            seq_pos.pos_in_src += lit_length + match_length;
+            try validateSequence(
+                off_base,
+                match_length,
+                cctx.applied_params.cparams.min_match,
+                seq_pos.pos_in_src,
+                cctx.applied_params.cparams.window_log,
+                dict_size,
+                ci.hasExtSeqProd(&cctx.applied_params),
+            );
+        }
+        // Too many sequences for the store; a larger minimum match helps.
+        if (idx - seq_pos.idx >= cctx.seq_store.max_nb_seq) return error.ExternalSequencesInvalid;
+        ci.storeSeq(&cctx.seq_store, lit_length, ip, iend, off_base, match_length);
+        ip += match_length + lit_length;
+    }
+    if (idx == in_seqs.len) return error.ExternalSequencesInvalid;
+
+    // The repeat offsets, when the search skipped them.
+    assert(external_rep_search != .auto);
+    assert(idx >= start_idx);
+    if (external_rep_search == .disable and idx != start_idx) {
+        const rep = &updated_repcodes.rep;
+        // The last sequence before the delimiter.
+        const last_seq_idx = idx - 1;
+        if (last_seq_idx >= start_idx + 2) {
+            rep[2] = in_seqs[last_seq_idx - 2].offset;
+            rep[1] = in_seqs[last_seq_idx - 1].offset;
+            rep[0] = in_seqs[last_seq_idx].offset;
+        } else if (last_seq_idx == start_idx + 1) {
+            rep[2] = rep[0];
+            rep[1] = in_seqs[last_seq_idx - 1].offset;
+            rep[0] = in_seqs[last_seq_idx].offset;
+        } else {
+            assert(last_seq_idx == start_idx);
+            rep[2] = rep[1];
+            rep[1] = rep[0];
+            rep[0] = in_seqs[last_seq_idx].offset;
+        }
+    }
+
+    cctx.block_state.next_cblock.rep = updated_repcodes.rep;
+
+    if (in_seqs[idx].lit_length != 0) {
+        storeLastLiterals(&cctx.seq_store, ip[0..in_seqs[idx].lit_length]);
+        ip += in_seqs[idx].lit_length;
+        seq_pos.pos_in_src += in_seqs[idx].lit_length;
+    }
+    if (ip != iend) return error.ExternalSequencesInvalid;
+    seq_pos.idx = idx + 1;
+    return src.len;
+}
+
+/// `ZSTD_transferSequences_noDelim`: stores the sequences of `in_seqs`
+/// from `seq_pos` that cover the block `src`, splitting the last one where
+/// the block ends; a match is split only when it is longer than the block,
+/// else the block ends before it. Returns the bytes of `src` the sequences
+/// cover, at most `src.len`. Repeat offsets are always resolved.
+fn transferSequencesNoDelim(
+    cctx: *CCtx,
+    seq_pos: *ci.SequencePosition,
+    in_seqs: []const Sequence,
+    src: []const u8,
+    external_rep_search: ParamSwitch,
+) Error!usize {
+    _ = external_rep_search;
+    var idx: u32 = seq_pos.idx;
+    var start_pos_in_sequence: u32 = seq_pos.pos_in_sequence;
+    var end_pos_in_sequence: u32 = seq_pos.pos_in_sequence + @as(u32, @intCast(src.len));
+    const istart = src.ptr;
+    var ip = istart;
+    // Moved back when the block ends before the match it reaches into.
+    var iend = istart + src.len;
+    var updated_repcodes: ci.Repcodes = .{ .rep = cctx.block_state.prev_cblock.rep };
+    var bytes_adjustment: u32 = 0;
+    var final_match_split = false;
+    const min_match_param = cctx.applied_params.cparams.min_match;
+    const dict_size: usize = if (cctx.cdict) |cdict|
+        cdict.dict_content_size
+    else if (cctx.prefix_dict.dict != null)
+        cctx.prefix_dict.dict_size
+    else
+        0;
+
+    while (end_pos_in_sequence != 0 and idx < in_seqs.len and !final_match_split) {
+        const curr_seq = in_seqs[idx];
+        var lit_length = curr_seq.lit_length;
+        var match_length = curr_seq.match_length;
+        const raw_offset = curr_seq.offset;
+
+        if (end_pos_in_sequence >= curr_seq.lit_length + curr_seq.match_length) {
+            // The whole sequence, less what an earlier block took.
+            if (start_pos_in_sequence >= lit_length) {
+                start_pos_in_sequence -= lit_length;
+                lit_length = 0;
+                match_length -= start_pos_in_sequence;
+            } else {
+                lit_length -= start_pos_in_sequence;
+            }
+            end_pos_in_sequence -= curr_seq.lit_length + curr_seq.match_length;
+            start_pos_in_sequence = 0;
+        } else {
+            // The block ends inside this sequence.
+            if (end_pos_in_sequence > lit_length) {
+                lit_length = if (start_pos_in_sequence >= lit_length)
+                    0
+                else
+                    lit_length - start_pos_in_sequence;
+                var first_half_match_length = end_pos_in_sequence - start_pos_in_sequence -
+                    lit_length;
+                if (match_length > src.len and first_half_match_length >= min_match_param) {
+                    // Split the match, keeping both halves at least the
+                    // minimum match long.
+                    const second_half_match_length = curr_seq.match_length +
+                        curr_seq.lit_length - end_pos_in_sequence;
+                    if (second_half_match_length < min_match_param) {
+                        end_pos_in_sequence -= min_match_param - second_half_match_length;
+                        bytes_adjustment = min_match_param - second_half_match_length;
+                        first_half_match_length -= bytes_adjustment;
+                    }
+                    match_length = first_half_match_length;
+                    // Stored, then the loop ends, keeping the position.
+                    final_match_split = true;
+                } else {
+                    // End the block before the match, at the sequence's
+                    // literals' end, and store the literals last.
+                    bytes_adjustment = end_pos_in_sequence - curr_seq.lit_length;
+                    end_pos_in_sequence = curr_seq.lit_length;
+                    break;
+                }
+            } else {
+                // The block ends inside the literals, stored last.
+                break;
+            }
+        }
+
+        const ll0: u32 = @intFromBool(lit_length == 0);
+        const off_base = finalizeOffBase(raw_offset, &updated_repcodes.rep, ll0);
+        ci.updateRep(&updated_repcodes.rep, off_base, ll0);
+
+        if (cctx.applied_params.validate_sequences) {
+            seq_pos.pos_in_src += lit_length + match_length;
+            try validateSequence(
+                off_base,
+                match_length,
+                min_match_param,
+                seq_pos.pos_in_src,
+                cctx.applied_params.cparams.window_log,
+                dict_size,
+                ci.hasExtSeqProd(&cctx.applied_params),
+            );
+        }
+        // Too many sequences for the store; a larger minimum match helps.
+        if (idx - seq_pos.idx >= cctx.seq_store.max_nb_seq) return error.ExternalSequencesInvalid;
+        ci.storeSeq(&cctx.seq_store, lit_length, ip, iend, off_base, match_length);
+        ip += match_length + lit_length;
+        if (!final_match_split) idx += 1;
+    }
+    assert(idx == in_seqs.len or
+        end_pos_in_sequence <= in_seqs[idx].lit_length + in_seqs[idx].match_length);
+    seq_pos.idx = idx;
+    seq_pos.pos_in_sequence = end_pos_in_sequence;
+    cctx.block_state.next_cblock.rep = updated_repcodes.rep;
+
+    iend -= bytes_adjustment;
+    if (ip != iend) {
+        // The last literals.
+        const last_ll_size = @intFromPtr(iend) - @intFromPtr(ip);
+        storeLastLiterals(&cctx.seq_store, ip[0..last_ll_size]);
+        seq_pos.pos_in_src += last_ll_size;
+    }
+    return @intFromPtr(iend) - @intFromPtr(istart);
+}
+
+/// `blockSize_explicitDelimiter`: the size of the block that ends at the
+/// next block delimiter from `seq_pos`, which must be there.
+fn blockSizeExplicitDelimiter(
+    in_seqs: []const Sequence,
+    seq_pos: ci.SequencePosition,
+) Error!usize {
+    var end = false;
+    var block_size: usize = 0;
+    var spos: usize = seq_pos.idx;
+    assert(spos <= in_seqs.len);
+    while (spos < in_seqs.len) : (spos += 1) {
+        end = in_seqs[spos].offset == 0;
+        block_size += in_seqs[spos].lit_length + in_seqs[spos].match_length;
+        if (end) {
+            // A delimiter has neither an offset nor a match.
+            if (in_seqs[spos].match_length != 0) return error.ExternalSequencesInvalid;
+            break;
+        }
+    }
+    if (!end) return error.ExternalSequencesInvalid;
+    return block_size;
+}
+
+/// `determine_blockSize`: the size of the next block: at most
+/// `block_size` of the `remaining` bytes without delimiters, the
+/// delimiters' block with them.
+fn determineBlockSize(
+    mode: params.SequenceFormat,
+    block_size: usize,
+    remaining: usize,
+    in_seqs: []const Sequence,
+    seq_pos: ci.SequencePosition,
+) Error!usize {
+    if (mode == .no_block_delimiters) return @min(remaining, block_size);
+    const explicit_block_size = try blockSizeExplicitDelimiter(in_seqs, seq_pos);
+    if (explicit_block_size > block_size) return error.ExternalSequencesInvalid;
+    if (explicit_block_size > remaining) return error.ExternalSequencesInvalid;
+    return explicit_block_size;
+}
+
+/// `ZSTD_compressSequences_internal`: the blocks of `src`, made from
+/// `in_seqs`. Returns their size, headers included.
+fn compressSequencesInternal(
+    cctx: *CCtx,
+    dst: []u8,
+    in_seqs: []const Sequence,
+    src: []const u8,
+) Error!usize {
+    var c_size: usize = 0;
+    var remaining = src.len;
+    var seq_pos: ci.SequencePosition = .{ .idx = 0, .pos_in_sequence = 0, .pos_in_src = 0 };
+    var ip: usize = 0;
+    var op: usize = 0;
+    const raw: u32 = @backingInt(zstd_internal.BlockType.raw);
+    const compressed: u32 = @backingInt(zstd_internal.BlockType.compressed);
+
+    // An empty frame: one empty raw block.
+    if (remaining == 0) {
+        const c_block_header24: u32 = 1 + (raw << 1);
+        if (dst.len < 4) return error.DstSizeTooSmall;
+        std.mem.writeInt(u32, dst[0..4], c_block_header24, .little);
+        op += block_header_size;
+        c_size += block_header_size;
+    }
+
+    while (remaining != 0) {
+        var block_size = try determineBlockSize(
+            cctx.applied_params.block_delimiters,
+            cctx.block_size_max,
+            remaining,
+            in_seqs,
+            seq_pos,
+        );
+        const last_block: u32 = @intFromBool(block_size == remaining);
+        assert(block_size <= remaining);
+        ci.resetSeqStore(&cctx.seq_store);
+
+        const block_src = src[ip..][0..block_size];
+        const rep_search = cctx.applied_params.search_for_external_repcodes;
+        block_size = switch (cctx.applied_params.block_delimiters) {
+            .explicit_block_delimiters => try transferSequencesWBlockDelim(
+                cctx,
+                &seq_pos,
+                in_seqs,
+                block_src,
+                rep_search,
+            ),
+            .no_block_delimiters => try transferSequencesNoDelim(
+                cctx,
+                &seq_pos,
+                in_seqs,
+                block_src,
+                rep_search,
+            ),
+        };
+
+        // A block too small to compress is stored raw. The minimum block
+        // has one byte more than elsewhere.
+        if (block_size < zstd_internal.min_cblock_size + block_header_size + 1 + 1) {
+            const c_block_size = try ci.noCompressBlock(
+                dst[op..],
+                src[ip..][0..block_size],
+                last_block,
+            );
+            c_size += c_block_size;
+            ip += block_size;
+            op += c_block_size;
+            remaining -= block_size;
+            continue;
+        }
+
+        if (dst.len - op < block_header_size) return error.DstSizeTooSmall;
+        var compressed_seqs_size = try entropyCompressSeqStore(
+            &cctx.seq_store,
+            &cctx.block_state.prev_cblock.entropy,
+            &cctx.block_state.next_cblock.entropy,
+            &cctx.applied_params,
+            dst[op + block_header_size ..],
+            block_size,
+            tmpWorkspace(cctx),
+            cctx.bmi2,
+        );
+
+        // Decoders up to 1.4.3 refuse a first block that is RLE.
+        if (!cctx.is_first_block and maybeRle(&cctx.seq_store) and
+            isRle(src[ip..][0..block_size]))
+        {
+            compressed_seqs_size = 1;
+        }
+
+        var c_block_size: usize = undefined;
+        if (compressed_seqs_size == 0) {
+            c_block_size = try ci.noCompressBlock(dst[op..], src[ip..][0..block_size], last_block);
+        } else if (compressed_seqs_size == 1) {
+            c_block_size = try ci.rleCompressBlock(dst[op..], src[ip], block_size, last_block);
+        } else {
+            blockStateConfirmRepcodesAndEntropyTables(&cctx.block_state);
+            if (cctx.block_state.prev_cblock.entropy.fse.offcode_repeat_mode == .valid) {
+                cctx.block_state.prev_cblock.entropy.fse.offcode_repeat_mode = .check;
+            }
+            const c_block_header: u32 = last_block + (compressed << 1) +
+                @as(u32, @intCast(compressed_seqs_size << 3));
+            writeLe24(dst[op..], c_block_header);
+            c_block_size = block_header_size + compressed_seqs_size;
+        }
+
+        c_size += c_block_size;
+        if (last_block != 0) break;
+        ip += block_size;
+        op += c_block_size;
+        remaining -= block_size;
+        cctx.is_first_block = false;
+    }
     return c_size;
+}
+
+/// `ZSTD_compressSequences`: compresses `src` into one frame with the
+/// requested parameters, made of the sequences `in_seqs` rather than ones
+/// a match finder finds. The sequences, with block delimiters or without,
+/// as `block_delimiters` says, must cover `src` exactly; with
+/// `validate_sequences`, every offset and match length is checked.
+pub fn compressSequences(
+    cctx: *CCtx,
+    dst: []u8,
+    in_seqs: []const Sequence,
+    src: []const u8,
+) Error!usize {
+    try cctxInitCompressStream2(cctx, .end, src.len);
+    const frame_header_size = try writeFrameHeader(
+        dst,
+        &cctx.applied_params,
+        src.len,
+        cctx.dict_id,
+    );
+    var op = frame_header_size;
+    if (cctx.applied_params.fparams.checksum_flag and src.len != 0) cctx.xxh_state.update(src);
+
+    op += try compressSequencesInternal(cctx, dst[op..], in_seqs, src);
+
+    if (cctx.applied_params.fparams.checksum_flag) {
+        const checksum: u32 = @truncate(cctx.xxh_state.final());
+        if (dst.len - op < 4) return error.DstSizeTooSmall;
+        std.mem.writeInt(u32, dst[op..][0..4], checksum, .little);
+        op += 4;
+    }
+    return op;
+}
+
+/// Whether the original's AVX2 paths of the sequence conversion are taken,
+/// as `@Vector`.
+const sequence_vectors = build_options.intrinsics and builtin.cpu.arch == .x86_64 and
+    std.Target.x86.featureSetHas(builtin.cpu.features, .avx2);
+
+/// `convertSequences_noRepcodes`: `in_seqs` as stored sequences with new
+/// offsets only. Returns 0, or for the one length over 0xFFFF its index
+/// plus 1, plus `in_seqs.len` for a literal length.
+fn convertSequencesNoRepcodes(dst_seqs: []SeqDef, in_seqs: []const Sequence) usize {
+    var long_len: usize = 0;
+    var i: usize = 0;
+    if (sequence_vectors) {
+        // Two sequences at a time: the offset plus `rep_num`, the match
+        // length less `min_match`; the lengths compared signed, as the
+        // original's vectors do.
+        const V = @Vector(8, u32);
+        const minus_min_match = @as(u32, 0) -% min_match;
+        const addition: V = .{ rep_num, 0, minus_min_match, 0, rep_num, 0, minus_min_match, 0 };
+        const limit: @Vector(8, i32) = @splat(65535);
+        while (i + 1 < in_seqs.len) : (i += 2) {
+            const vin: V = @bitCast(std.mem.toBytes(in_seqs[i..][0..2].*));
+            const vadd = vin +% addition;
+            const over = @as(@Vector(8, i32), @bitCast(vadd)) > limit;
+            dst_seqs[i] = .{
+                .off_base = vadd[0],
+                .lit_length = @truncate(vadd[1]),
+                .ml_base = @truncate(vadd[2]),
+            };
+            dst_seqs[i + 1] = .{
+                .off_base = vadd[4],
+                .lit_length = @truncate(vadd[5]),
+                .ml_base = @truncate(vadd[6]),
+            };
+            // A long length: which one.
+            if (over[1] or over[2] or over[5] or over[6]) {
+                for (i..i + 2) |n| {
+                    if (in_seqs[n].match_length > 65535 + min_match) {
+                        assert(long_len == 0);
+                        long_len = n + 1;
+                    }
+                    if (in_seqs[n].lit_length > 65535) {
+                        assert(long_len == 0);
+                        long_len = n + in_seqs.len + 1;
+                    }
+                }
+            }
+        }
+    }
+    while (i < in_seqs.len) : (i += 1) {
+        dst_seqs[i].off_base = ci.offsetToOffbase(in_seqs[i].offset);
+        dst_seqs[i].lit_length = @truncate(in_seqs[i].lit_length);
+        dst_seqs[i].ml_base = @truncate(in_seqs[i].match_length - min_match);
+        if (in_seqs[i].match_length > 65535 + min_match) {
+            assert(long_len == 0);
+            long_len = i + 1;
+        }
+        if (in_seqs[i].lit_length > 65535) {
+            assert(long_len == 0);
+            long_len = i + in_seqs.len + 1;
+        }
+    }
+    return long_len;
+}
+
+/// `ZSTD_convertBlockSequences`: stores the sequences of one block,
+/// `in_seqs`, which ends with its delimiter, with their repeat offsets
+/// resolved when `repcode_resolution`; the sequences are not validated.
+pub fn convertBlockSequences(
+    cctx: *CCtx,
+    in_seqs: []const Sequence,
+    repcode_resolution: bool,
+) Error!void {
+    // Too many sequences for the store; a larger minimum match helps.
+    if (in_seqs.len >= cctx.seq_store.max_nb_seq) return error.ExternalSequencesInvalid;
+    var updated_repcodes: ci.Repcodes = .{ .rep = cctx.block_state.prev_cblock.rep };
+
+    // The caller found the block's delimiter.
+    assert(in_seqs.len >= 1);
+    assert(in_seqs[in_seqs.len - 1].match_length == 0);
+    assert(in_seqs[in_seqs.len - 1].offset == 0);
+    const nb_seqs = in_seqs.len - 1;
+
+    if (!repcode_resolution) {
+        const seq_store = &cctx.seq_store;
+        const longl = convertSequencesNoRepcodes(
+            seq_store.sequences_start[0..nb_seqs],
+            in_seqs[0..nb_seqs],
+        );
+        seq_store.sequences = seq_store.sequences_start + nb_seqs;
+        if (longl != 0) {
+            assert(seq_store.long_length_type == .none);
+            if (longl <= nb_seqs) {
+                seq_store.long_length_type = .match_length;
+                seq_store.long_length_pos = @intCast(longl - 1);
+            } else {
+                assert(longl <= 2 * nb_seqs);
+                seq_store.long_length_type = .literal_length;
+                seq_store.long_length_pos = @intCast(longl - nb_seqs - 1);
+            }
+        }
+    } else {
+        for (in_seqs[0..nb_seqs]) |seq| {
+            const ll0: u32 = @intFromBool(seq.lit_length == 0);
+            const off_base = finalizeOffBase(seq.offset, &updated_repcodes.rep, ll0);
+            ci.storeSeqOnly(&cctx.seq_store, seq.lit_length, off_base, seq.match_length);
+            ci.updateRep(&updated_repcodes.rep, off_base, ll0);
+        }
+    }
+
+    // The repeat offsets, when the conversion skipped them.
+    if (!repcode_resolution and in_seqs.len > 1) {
+        const rep = &updated_repcodes.rep;
+        if (in_seqs.len >= 4) {
+            // The last full sequence.
+            const last_seq_idx = in_seqs.len - 2;
+            rep[2] = in_seqs[last_seq_idx - 2].offset;
+            rep[1] = in_seqs[last_seq_idx - 1].offset;
+            rep[0] = in_seqs[last_seq_idx].offset;
+        } else if (in_seqs.len == 3) {
+            rep[2] = rep[0];
+            rep[1] = in_seqs[0].offset;
+            rep[0] = in_seqs[1].offset;
+        } else {
+            assert(in_seqs.len == 2);
+            rep[2] = rep[1];
+            rep[1] = rep[0];
+            rep[0] = in_seqs[0].offset;
+        }
+    }
+
+    cctx.block_state.next_cblock.rep = updated_repcodes.rep;
+}
+
+/// `BlockSummary`.
+pub const BlockSummary = struct {
+    /// The block's sequences, its delimiter included.
+    nb_sequences: usize,
+    block_size: usize,
+    lit_size: usize,
+};
+
+/// `ZSTD_get1BlockSummary`: the first block of `seqs`, up to the first
+/// sequence without a match, its delimiter, which must be there.
+pub fn get1BlockSummary(seqs: []const Sequence) Error!BlockSummary {
+    var i: usize = 0;
+    var l_sum: usize = 0;
+    var m_sum: usize = 0;
+    if (sequence_vectors) {
+        // Two sequences at a time, the sums in 32-bit lanes, as the
+        // original's vectors keep them.
+        const V = @Vector(8, u32);
+        const zero_vec: V = @splat(0);
+        var sum_vec = zero_vec;
+        while (i + 2 <= seqs.len) : (i += 2) {
+            const data: V = @bitCast(std.mem.toBytes(seqs[i..][0..2].*));
+            // The end of the block, in either.
+            const is_zero = data == zero_vec;
+            if (is_zero[2] or is_zero[6]) break;
+            sum_vec +%= data;
+        }
+        l_sum = sum_vec[1] +% sum_vec[5];
+        m_sum = sum_vec[2] +% sum_vec[6];
+    }
+    while (i < seqs.len) : (i += 1) {
+        l_sum += seqs[i].lit_length;
+        m_sum += seqs[i].match_length;
+        if (seqs[i].match_length == 0) {
+            if (!sequence_vectors) assert(seqs[i].offset == 0);
+            break;
+        }
+    }
+    // No delimiter.
+    if (i == seqs.len) return error.ExternalSequencesInvalid;
+    return .{ .nb_sequences = i + 1, .block_size = l_sum + m_sum, .lit_size = l_sum };
+}
+
+/// `ZSTD_compressSequencesAndLiterals_internal`: the blocks of the
+/// sequences `in_seqs`, with block delimiters, and their `literals`.
+/// Returns their size, headers included.
+fn compressSequencesAndLiteralsInternal(
+    cctx: *CCtx,
+    dst: []u8,
+    in_seqs_all: []const Sequence,
+    literals_all: []const u8,
+    src_size: usize,
+) Error!usize {
+    var remaining = src_size;
+    var c_size: usize = 0;
+    var op: usize = 0;
+    var in_seqs = in_seqs_all;
+    var literals = literals_all;
+    const repcode_resolution = cctx.applied_params.search_for_external_repcodes == .enable;
+    assert(cctx.applied_params.search_for_external_repcodes != .auto);
+    const compressed: u32 = @backingInt(zstd_internal.BlockType.compressed);
+
+    // At least the delimiter of one block.
+    if (in_seqs.len == 0) return error.ExternalSequencesInvalid;
+
+    // An empty frame: one empty raw block.
+    if (in_seqs.len == 1 and in_seqs[0].lit_length == 0) {
+        const c_block_header24: u32 = 1 + (@as(u32, @backingInt(zstd_internal.BlockType.raw)) << 1);
+        if (dst.len < 3) return error.DstSizeTooSmall;
+        writeLe24(dst, c_block_header24);
+        op += block_header_size;
+        c_size += block_header_size;
+    }
+
+    while (in_seqs.len != 0) {
+        const block = try get1BlockSummary(in_seqs);
+        const last_block: u32 = @intFromBool(block.nb_sequences == in_seqs.len);
+        assert(block.nb_sequences <= in_seqs.len);
+        if (block.lit_size > literals.len) return error.ExternalSequencesInvalid;
+        ci.resetSeqStore(&cctx.seq_store);
+
+        try convertBlockSequences(cctx, in_seqs[0..block.nb_sequences], repcode_resolution);
+        in_seqs = in_seqs[block.nb_sequences..];
+        // Wraps when the sequences cover more than `src_size`, which the
+        // check at the end refuses.
+        remaining -%= block.block_size;
+
+        // A small block is still compressed: without the source, it cannot
+        // be stored raw.
+        if (dst.len - op < block_header_size) return error.DstSizeTooSmall;
+        var compressed_seqs_size = try entropyCompressSeqStoreInternal(
+            dst[op + block_header_size ..],
+            literals[0..block.lit_size],
+            &cctx.seq_store,
+            &cctx.block_state.prev_cblock.entropy,
+            &cctx.block_state.next_cblock.entropy,
+            &cctx.applied_params,
+            tmpWorkspace(cctx),
+            cctx.bmi2,
+        );
+        // The format forbids a compressed block larger than a block.
+        if (compressed_seqs_size > cctx.block_size_max) compressed_seqs_size = 0;
+        literals = literals[block.lit_size..];
+
+        // Nor can a block that does not compress.
+        if (compressed_seqs_size == 0) return error.CannotProduceUncompressedBlock;
+        assert(compressed_seqs_size > 1);
+        blockStateConfirmRepcodesAndEntropyTables(&cctx.block_state);
+        if (cctx.block_state.prev_cblock.entropy.fse.offcode_repeat_mode == .valid) {
+            cctx.block_state.prev_cblock.entropy.fse.offcode_repeat_mode = .check;
+        }
+        const c_block_header: u32 = last_block + (compressed << 1) +
+            @as(u32, @intCast(compressed_seqs_size << 3));
+        writeLe24(dst[op..], c_block_header);
+        const c_block_size = block_header_size + compressed_seqs_size;
+
+        c_size += c_block_size;
+        op += c_block_size;
+        cctx.is_first_block = false;
+        if (last_block != 0) {
+            assert(in_seqs.len == 0);
+            break;
+        }
+    }
+
+    // The literals and the sequences must cover the frame exactly.
+    if (literals.len != 0) return error.ExternalSequencesInvalid;
+    if (remaining != 0) return error.ExternalSequencesInvalid;
+    return c_size;
+}
+
+/// `ZSTD_compressSequencesAndLiterals`: compresses a frame of
+/// `decompressed_size` bytes, given only as the sequences `in_seqs` (with
+/// block delimiters, the parameter `block_delimiters` set so) and their
+/// `literals`, one after the other. The sequences are not validated, and
+/// the frame has no checksum: the content is never seen. Every block must
+/// compress. `lit_capacity` is the size of the caller's literals buffer,
+/// at least `literals.len`, as in the original, though the port reads
+/// only `literals`.
+pub fn compressSequencesAndLiterals(
+    cctx: *CCtx,
+    dst: []u8,
+    in_seqs: []const Sequence,
+    literals: []const u8,
+    lit_capacity: usize,
+    decompressed_size: usize,
+) Error!usize {
+    if (lit_capacity < literals.len) return error.WorkSpaceTooSmall;
+    try cctxInitCompressStream2(cctx, .end, decompressed_size);
+
+    if (cctx.applied_params.block_delimiters == .no_block_delimiters) {
+        return error.FrameParameterUnsupported;
+    }
+    if (cctx.applied_params.validate_sequences) return error.ParameterUnsupported;
+    if (cctx.applied_params.fparams.checksum_flag) return error.FrameParameterUnsupported;
+
+    const frame_header_size = try writeFrameHeader(
+        dst,
+        &cctx.applied_params,
+        decompressed_size,
+        cctx.dict_id,
+    );
+    const c_blocks_size = try compressSequencesAndLiteralsInternal(
+        cctx,
+        dst[frame_header_size..],
+        in_seqs,
+        literals,
+        decompressed_size,
+    );
+    return frame_header_size + c_blocks_size;
+}
+
+// ---------------------------------------------------------------------------
+// The end of a stream
+// ---------------------------------------------------------------------------
+
+/// `inBuffer_forEndFlush`: the input of a flush or an end, the stable
+/// input itself in that mode.
+fn inBufferForEndFlush(zcs: *const CCtx) params.InBuffer {
+    if (zcs.applied_params.in_buffer_mode == .stable) return zcs.expected_in_buffer;
+    return .{ .src = &.{} };
+}
+
+/// `ZSTD_flushStream`: `compressStream2` with `.flush` and no more input.
+/// Returns the bytes still to flush.
+pub fn flushStream(zcs: *CCtx, output: *params.OutBuffer) Error!usize {
+    var input = inBufferForEndFlush(zcs);
+    // Nothing more is taken.
+    input.src = input.src[0..input.pos];
+    return compressStream2(zcs, output, &input, .flush);
+}
+
+/// `ZSTD_endStream`: `compressStream2` with `.end`, with no more input
+/// but a stable input's. Returns the bytes still to write, 0 once the
+/// frame is complete; for a single thread, the last block's header and the
+/// checksum count when they are still to come.
+pub fn endStream(zcs: *CCtx, output: *params.OutBuffer) Error!usize {
+    var input = inBufferForEndFlush(zcs);
+    const remaining_to_flush = try compressStream2(zcs, output, &input, .end);
+    // A lower bound for several threads.
+    if (zcs.applied_params.nb_workers > 0) return remaining_to_flush;
+    const last_block_size: usize = if (zcs.frame_ended) 0 else block_header_size;
+    const checksum_size: usize = if (zcs.frame_ended)
+        0
+    else
+        @as(usize, @intFromBool(zcs.applied_params.fparams.checksum_flag)) * 4;
+    return remaining_to_flush + last_block_size + checksum_size;
 }
 
 // ---------------------------------------------------------------------------
@@ -5897,139 +7207,6 @@ pub fn cctxParamsRegisterSequenceProducer(
     producer: ?ci.SequenceProducer,
 ) void {
     cctx_params.ext_seq_prod = producer;
-}
-
-// ---------------------------------------------------------------------------
-// Sequences from the caller
-// ---------------------------------------------------------------------------
-
-/// `ZSTD_validateSequence`: whether a sequence `pos_in_src` bytes into the
-/// frame has an offset the decoder can reach and a long enough match.
-fn validateSequence(
-    off_base: u32,
-    match_length: u32,
-    min_match_param: u32,
-    pos_in_src: usize,
-    window_log: u32,
-    dict_size: usize,
-    use_sequence_producer: bool,
-) Error!void {
-    const window_size = @as(u32, 1) << @intCast(window_log);
-    // Until the output reaches the window size, offsets reach into the
-    // dictionary, even beyond the window size; then, the window size.
-    const offset_bound: usize =
-        if (pos_in_src > window_size) window_size else pos_in_src + dict_size;
-    const match_len_lower_bound: u32 = if (min_match_param == 3 or use_sequence_producer) 3 else 4;
-    if (off_base > offset_bound + rep_num) return error.ExternalSequencesInvalid;
-    if (match_length < match_len_lower_bound) return error.ExternalSequencesInvalid;
-}
-
-/// `ZSTD_finalizeOffBase`: the off_base of a raw offset, a repeat code
-/// where it matches one.
-fn finalizeOffBase(raw_offset: u32, rep: *const [rep_num]u32, ll0: u32) u32 {
-    var off_base = ci.offsetToOffbase(raw_offset);
-    if (ll0 == 0 and raw_offset == rep[0]) {
-        off_base = ci.repcode1_to_offbase;
-    } else if (raw_offset == rep[1]) {
-        off_base = ci.repcodeToOffbase(2 - ll0);
-    } else if (raw_offset == rep[2]) {
-        off_base = ci.repcodeToOffbase(3 - ll0);
-    } else if (ll0 != 0 and raw_offset == rep[0] -% 1) {
-        off_base = ci.repcode3_to_offbase;
-    }
-    return off_base;
-}
-
-/// `ZSTD_transferSequences_wBlockDelim`: stores the sequences of
-/// `in_seqs` from `seq_pos` to the next block delimiter, whose literals end
-/// the block of `src`. Their lengths must add up to `src.len`. Returns
-/// `src.len`.
-fn transferSequencesWBlockDelim(
-    cctx: *CCtx,
-    seq_pos: *ci.SequencePosition,
-    in_seqs: []const Sequence,
-    src: []const u8,
-    external_rep_search: ParamSwitch,
-) Error!usize {
-    var idx: u32 = seq_pos.idx;
-    const start_idx = idx;
-    var ip = src.ptr;
-    const iend = src.ptr + src.len;
-    var updated_repcodes: ci.Repcodes = .{ .rep = cctx.block_state.prev_cblock.rep };
-    const dict_size: u32 = if (cctx.cdict) |cdict|
-        @intCast(cdict.dict_content_size)
-    else if (cctx.prefix_dict.dict != null)
-        @intCast(cctx.prefix_dict.dict_size)
-    else
-        0;
-
-    while (idx < in_seqs.len and (in_seqs[idx].match_length != 0 or
-        in_seqs[idx].offset != 0)) : (idx += 1)
-    {
-        const lit_length = in_seqs[idx].lit_length;
-        const match_length = in_seqs[idx].match_length;
-        var off_base: u32 = undefined;
-
-        if (external_rep_search == .disable) {
-            off_base = ci.offsetToOffbase(in_seqs[idx].offset);
-        } else {
-            const ll0: u32 = @intFromBool(lit_length == 0);
-            off_base = finalizeOffBase(in_seqs[idx].offset, &updated_repcodes.rep, ll0);
-            ci.updateRep(&updated_repcodes.rep, off_base, ll0);
-        }
-
-        if (cctx.applied_params.validate_sequences) {
-            seq_pos.pos_in_src += lit_length + match_length;
-            try validateSequence(
-                off_base,
-                match_length,
-                cctx.applied_params.cparams.min_match,
-                seq_pos.pos_in_src,
-                cctx.applied_params.cparams.window_log,
-                dict_size,
-                ci.hasExtSeqProd(&cctx.applied_params),
-            );
-        }
-        // Too many sequences for the store; a larger minimum match helps.
-        if (idx - seq_pos.idx >= cctx.seq_store.max_nb_seq) return error.ExternalSequencesInvalid;
-        ci.storeSeq(&cctx.seq_store, lit_length, ip, iend, off_base, match_length);
-        ip += match_length + lit_length;
-    }
-    if (idx == in_seqs.len) return error.ExternalSequencesInvalid;
-
-    // The repeat offsets, when the search skipped them.
-    assert(external_rep_search != .auto);
-    assert(idx >= start_idx);
-    if (external_rep_search == .disable and idx != start_idx) {
-        const rep = &updated_repcodes.rep;
-        // The last sequence before the delimiter.
-        const last_seq_idx = idx - 1;
-        if (last_seq_idx >= start_idx + 2) {
-            rep[2] = in_seqs[last_seq_idx - 2].offset;
-            rep[1] = in_seqs[last_seq_idx - 1].offset;
-            rep[0] = in_seqs[last_seq_idx].offset;
-        } else if (last_seq_idx == start_idx + 1) {
-            rep[2] = rep[0];
-            rep[1] = in_seqs[last_seq_idx - 1].offset;
-            rep[0] = in_seqs[last_seq_idx].offset;
-        } else {
-            assert(last_seq_idx == start_idx);
-            rep[2] = rep[1];
-            rep[1] = rep[0];
-            rep[0] = in_seqs[last_seq_idx].offset;
-        }
-    }
-
-    cctx.block_state.next_cblock.rep = updated_repcodes.rep;
-
-    if (in_seqs[idx].lit_length != 0) {
-        storeLastLiterals(&cctx.seq_store, ip[0..in_seqs[idx].lit_length]);
-        ip += in_seqs[idx].lit_length;
-        seq_pos.pos_in_src += in_seqs[idx].lit_length;
-    }
-    if (ip != iend) return error.ExternalSequencesInvalid;
-    seq_pos.idx = idx + 1;
-    return src.len;
 }
 
 // ---------------------------------------------------------------------------

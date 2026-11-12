@@ -904,7 +904,6 @@ pub extern fn reference_sequenceProducer(
     window_size: usize,
 ) callconv(.c) usize;
 
-
 /// The lazy match finders' block test in test/reference.c. `dict_kind`: 0
 /// none, 1 loaded into the context, 2 attached as a dict match state, 3
 /// compressed as an earlier block of the same context.
@@ -947,4 +946,74 @@ pub extern fn reference_lazyBlockTest(
     src: ?*const anyopaque,
     src_size: usize,
     result: *reference_LazyResult,
+) usize;
+
+// Streaming, and the sequence API's compression.
+
+pub extern fn ZSTD_compressStream2_simpleArgs(
+    cctx: *ZSTD_CCtx,
+    dst: ?*anyopaque,
+    dst_capacity: usize,
+    dst_pos: *usize,
+    src: ?*const anyopaque,
+    src_size: usize,
+    src_pos: *usize,
+    end_op: c_uint,
+) usize;
+pub extern fn ZSTD_compressStream(
+    zcs: *ZSTD_CCtx,
+    output: *ZSTD_outBuffer,
+    input: *ZSTD_inBuffer,
+) usize;
+pub extern fn ZSTD_flushStream(zcs: *ZSTD_CCtx, output: *ZSTD_outBuffer) usize;
+pub extern fn ZSTD_endStream(zcs: *ZSTD_CCtx, output: *ZSTD_outBuffer) usize;
+pub extern fn ZSTD_CStreamInSize() usize;
+pub extern fn ZSTD_CStreamOutSize() usize;
+pub extern fn ZSTD_initCStream(zcs: *ZSTD_CCtx, level: c_int) usize;
+pub extern fn ZSTD_initCStream_srcSize(zcs: *ZSTD_CCtx, level: c_int, pss: c_ulonglong) usize;
+pub extern fn ZSTD_initCStream_usingDict(
+    zcs: *ZSTD_CCtx,
+    dict: ?*const anyopaque,
+    dict_size: usize,
+    level: c_int,
+) usize;
+pub extern fn ZSTD_initCStream_advanced(
+    zcs: *ZSTD_CCtx,
+    dict: ?*const anyopaque,
+    dict_size: usize,
+    params: ZSTD_parameters,
+    pss: c_ulonglong,
+) usize;
+pub extern fn ZSTD_initCStream_usingCDict(zcs: *ZSTD_CCtx, cdict: ?*const ZSTD_CDict) usize;
+pub extern fn ZSTD_initCStream_usingCDict_advanced(
+    zcs: *ZSTD_CCtx,
+    cdict: ?*const ZSTD_CDict,
+    fparams: ZSTD_frameParameters,
+    pss: c_ulonglong,
+) usize;
+pub extern fn ZSTD_resetCStream(zcs: *ZSTD_CCtx, pss: c_ulonglong) usize;
+pub extern fn ZSTD_getFrameProgression(cctx: *const ZSTD_CCtx) ZSTD_frameProgression;
+pub extern fn ZSTD_toFlushNow(cctx: *ZSTD_CCtx) usize;
+pub extern fn ZSTD_sizeof_CStream(zcs: ?*const ZSTD_CCtx) usize;
+pub extern fn ZSTD_initStaticCStream(workspace: ?*anyopaque, workspace_size: usize) ?*ZSTD_CCtx;
+pub extern fn ZSTD_CCtx_refThreadPool(cctx: *ZSTD_CCtx, pool: ?*ZSTD_threadPool) usize;
+pub extern fn ZSTD_compressSequences(
+    cctx: *ZSTD_CCtx,
+    dst: ?*anyopaque,
+    dst_capacity: usize,
+    in_seqs: ?[*]const ZSTD_Sequence,
+    in_seqs_size: usize,
+    src: ?*const anyopaque,
+    src_size: usize,
+) usize;
+pub extern fn ZSTD_compressSequencesAndLiterals(
+    cctx: *ZSTD_CCtx,
+    dst: ?*anyopaque,
+    dst_capacity: usize,
+    in_seqs: ?[*]const ZSTD_Sequence,
+    nb_sequences: usize,
+    literals: ?*const anyopaque,
+    lit_size: usize,
+    lit_capacity: usize,
+    decompressed_size: usize,
 ) usize;
