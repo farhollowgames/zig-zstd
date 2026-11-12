@@ -13,6 +13,7 @@ pub const internal = struct {
     pub const compress_internal = @import("compress/compress_internal.zig");
     pub const cwksp = @import("compress/cwksp.zig");
     pub const clevels = @import("compress/clevels.zig");
+    pub const ldm = @import("compress/ldm.zig");
 };
 
 test {
@@ -23,4 +24,5 @@ test {
     _ = @import("compress/compress_internal.zig");
     _ = @import("compress/cwksp.zig");
     _ = @import("compress/clevels.zig");
+    _ = @import("compress/ldm.zig");
 }
