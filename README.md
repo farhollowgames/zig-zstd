@@ -106,18 +106,20 @@ returned value, and decode every frame back through std's decoder and the
 original's.
 
 Port time against original time, one-shot compression of the Silesia corpus,
-one thread, before the performance pass:
+pinned to one core:
 
 | feature | port vs original |
 | --- | ---: |
-| level -1, whole files | 2% faster |
-| level 1, whole files | 10% slower |
-| level 3, whole files | 32% slower |
+| level -1, whole files | 0.4% faster |
+| level 1, whole files | 2% slower |
+| level 3 (the default), whole files | 1% faster |
+| levels 5 to 9, 2 MiB of each file | 2% to 4% slower |
 | level 19, 2 MiB of each file | 3% faster |
-| level 22, 2 MiB of each file | 4% faster |
+| level 22, 2 MiB of each file | within noise |
 
-AMD Ryzen 9 9950X3D, one thread, Zig 0.17.0 ReleaseFast against the original
-at `-O3`, both for `znver5`; the median of five runs (three from level 16).
+AMD Ryzen 9 9950X3D, Zig 0.17.0 ReleaseFast against the original at `-O3`
+with upstream's shared-library flags, both for `znver5`; the median of five
+runs (three from level 16), with transparent huge pages off for the benchmark.
 The compressed sizes are the same at every level, since the frames are.
 
 - [`doc/TESTING.md`](doc/TESTING.md): how the tests compare the port with
