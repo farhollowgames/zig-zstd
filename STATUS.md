@@ -214,6 +214,8 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
   `review/perf-and-skeptic`. Its target is no level slower than upstream, level 3 and 4
   first. Each kept change is one commit with its pinned-core gain in the message; its
   notes on what was tried are in the section below as they land.
+- `review/perf-3` (worktree `zig-zstd.wt/perf3`): the third perf pass, made from
+  `review/perf-and-skeptic`, on code placement at levels 1 and 5 to 9 (notes below).
 - `port/*`: the merged porting branches, kept for history.
 
 **The second performance pass** (`review/perf-2`, worktree `zig-zstd.wt/perf2`), as of
@@ -287,6 +289,40 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
   `glibc.malloc.hugetlb` tunable for the huge-page bias (no effect).
 - Next, if wanted: why the row matcher's searches at levels 5 to 9 and the fast loop at
   level 1 lose cycles in some layouts (`perf annotate` of both builds' hot loops).
+
+**The third performance pass** (`review/perf-3`, worktree `zig-zstd.wt/perf3`), 12 November:
+- Kept: `-Dbench-code-shift=N` puts N dead bytes into the bench's `main`, so the port's
+  functions land elsewhere with the same code (`9c864e3`). Placement tests below use 0, 16
+  and 1360. The shift does not move code by exactly N: check where the hot functions land
+  with `nm`.
+- Found: the placement gap is instruction-cache misses on loops that straddle a 4 KiB page.
+  With the same bytes for the fast block compressor, one build missed the L1i 15 million
+  times at level 1 and another 194 million (`ic_tag_hit_miss.instruction_cache_miss:u`,
+  `perf record` of it puts 76% in that function's loop, which crossed a page in the slow
+  build only), and the loop took 3.8% more cycles. The original's row search at levels 5
+  to 9 takes misses of the same size in its own build. Cache-line alignment alone (64)
+  fixed levels 5 to 9 at three placements but left level 1 at 0.999 to 1.021, as its loop
+  sits in the middle of the 17 KiB fast dispatcher.
+- Kept (`2c17cff`): the functions that run the inner loops are aligned to 4096
+  (`hot_code_align`): fast and double-fast variants, lazy block compressors, hash-chain,
+  row and binary-tree searches, the histogram, the sequence encoder, the Huffman 1X coder,
+  buildSequencesStatistics. The fast and double-fast variants are noinline functions of
+  their own (under 4 KiB each), where they were inlined into one dispatcher. Levels 5 to 9
+  0.99 to 1.006 at every placement (before 1.011 to 1.027), level 1 1.007 to 1.010 (before
+  1.018), levels 3 and 4 within 1% of before. Cost: 225 KB of padding in the text (1.24 to 1.47 MB
+  in the bench binary), never fetched.
+- Left slower: levels -5, -1 and 2 lose 0.5% to 2% against the build before (-1 0.982 to
+  1.005, 2 1.005 to 1.010), and levels 1 and 2 stay about 1% slower than the original at
+  every placement. The split-out fast variants compile to about 5% more instructions in
+  their loop than the inlined ones (more spills of loop invariants; 19.99 against 19.41
+  billion instructions at level 1, both sides). Padding a variant's entry by 16, 32 or 48
+  bytes moved level 1 by under 0.6%, so it is not the loop's place in a cache line.
+- Tried and dropped: page-aligning the fast dispatcher with the variants inlined (level 1
+  1.018: its loop crosses the page at offset 16 KiB), and entry padding in the fast
+  variants (above).
+- Next, if wanted: the fast variant's register allocation (the inlined version keeps the
+  hash prime in memory and spills fewer loop invariants); restricting the page alignment
+  to the no-dictionary paths would roughly halve the padding.
 
 **To resume.**
 1. Step 7 is done: the full suite with the corpora passes on x86-64 (310 of 312, the 2

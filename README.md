@@ -110,12 +110,12 @@ pinned to one core:
 
 | feature | port vs original |
 | --- | ---: |
-| level -1, whole files | 0.4% faster |
-| level 1, whole files | 2% slower |
-| level 3 (the default), whole files | 1% faster |
-| levels 5 to 9, 2 MiB of each file | 2% to 4% slower |
-| level 19, 2 MiB of each file | 3% faster |
-| level 22, 2 MiB of each file | within noise |
+| level -1, whole files | 0.6% slower |
+| level 1, whole files | 1% slower |
+| level 3 (the default), whole files | 0.7% faster |
+| levels 5 to 9, 2 MiB of each file | 0.6% faster to 1% slower |
+| level 19, 2 MiB of each file | 4% faster |
+| level 22, 2 MiB of each file | 3% faster |
 
 AMD Ryzen 9 9950X3D, Zig 0.17.0 ReleaseFast against the original at `-O3`
 with upstream's shared-library flags, both for `znver5`; the median of five
