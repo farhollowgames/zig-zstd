@@ -188,17 +188,17 @@ Pushing: `main` and the review branch go to
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| `zstdmt_compress.c`: jobs, overlap, job size, `rsyncable`, flush | `zstdmt.zig` on `std.Thread` | not started |
-| `ZSTD_createThreadPool`, `ZSTD_freeThreadPool`, `ZSTD_CCtx_refThreadPool` | `ThreadPool` | not started |
+| `zstdmt_compress.c`: jobs, overlap, job size, `rsyncable`, long distance matching across jobs, checksum, flush, frame progression, `updateCParams_whileCompressing` | `zstdmt.zig` on `std.Thread` and `std.Io` locks | oracle-tested (`test/mt_test.zig`: `ZSTDMT_initCStream_internal` and `ZSTDMT_compressStream_generic` driven as `ZSTD_compressStream2` drives them, every frame equal on every run; `compressStream2` itself waits for the streaming half) |
+| `ZSTD_createThreadPool`, `ZSTD_freeThreadPool`, `ZSTD_CCtx_refThreadPool`; `pool.c` | `pool.createThreadPool`, `pool.freeThreadPool`, `CCtx.refThreadPool`; `pool.ThreadPool` | ported (unit tests in `pool.zig`; oracle-tested as a context's shared pool) |
 
 ## Build switches
 
 | original | zig-zstd | state |
 | --- | --- | --- |
-| `ZSTD_MULTITHREAD` | `-Dmultithread` (`build_options.multithread`) | not started |
+| `ZSTD_MULTITHREAD` | `-Dmultithread` (`build_options.multithread`) | ported (off: one shared pool runs jobs inline, and no multithreaded context is made) |
 | `ZSTD_NO_INTRINSICS`, `ZSTD_ARCH_X86_SSE2`, `ZSTD_ARCH_X86_AVX2`, `ZSTD_ARCH_ARM_NEON` | `-Dintrinsics`, the target's CPU features | not started |
 | `ZSTD_CLEVEL_DEFAULT` | `params.clevel_default` | not started |
-| `ZSTDMT_NBWORKERS_MAX`, `ZSTDMT_JOBSIZE_MIN` | constants in `zstdmt.zig` | not started |
+| `ZSTDMT_NBWORKERS_MAX`, `ZSTDMT_JOBSIZE_MIN`, `ZSTDMT_JOBSIZE_MAX` | `nbworkers_max`, `jobsize_min`, `jobsize_max` in `zstdmt.zig` | ported (the original's values) |
 | `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY` | a build option for the tests | ported (`build_options.overflow_correct_frequently`, always off: no `-D` flag yet) |
 
 ## Left out, awaiting the author's approval
