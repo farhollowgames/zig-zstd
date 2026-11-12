@@ -240,8 +240,10 @@ inline fn compressBlockDoubleFastNoDictGeneric(
             idxl1 = hash_long[hl1];
             matchl1 = base + idxl1;
 
-            // The same for the short match.
-            const matchs0_safe = ci.selectAddr(idxs0, prefix_lowest_index, matchs0, &dummy);
+            // The same for the short match, as a plain select: the compiler
+            // may branch on it, which measures faster here than the
+            // conditional move `selectAddr` forces on x86-64.
+            const matchs0_safe = if (idxs0 >= prefix_lowest_index) matchs0 else &dummy;
 
             // A short match in the prefix.
             if (std.mem.readInt(u32, matchs0_safe[0..4], native_endian) ==

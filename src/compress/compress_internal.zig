@@ -1027,12 +1027,26 @@ pub inline fn mlCode(ml_base: u32) u32 {
 }
 
 /// `ZSTD_selectAddr`: `candidate` when `index >= low_limit`, else `backup`.
+/// On x86-64 it is a conditional move written out, as in the original: the
+/// comparison is hard to predict, and the compiler turns a plain select
+/// into a branch.
 pub inline fn selectAddr(
     index: u32,
     low_limit: u32,
     candidate: [*]const u8,
     backup: [*]const u8,
 ) [*]const u8 {
+    if (builtin.cpu.arch == .x86_64) {
+        return asm (
+            \\cmp %[index], %[low_limit]
+            \\cmova %[backup], %[result]
+            : [result] "=r" (-> [*]const u8),
+            : [_] "0" (candidate),
+              [index] "r" (index),
+              [low_limit] "r" (low_limit),
+              [backup] "r" (backup),
+            : .{ .cc = true });
+    }
     return if (index >= low_limit) candidate else backup;
 }
 
