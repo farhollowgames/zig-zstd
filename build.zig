@@ -137,7 +137,13 @@ pub fn build(b: *std.Build) void {
         check_step.dependOn(&oracle.step);
     }
 
-    addBench(b, target, intrinsics, multithread, silesia);
+    const bench_code_shift = b.option(
+        u32,
+        "bench-code-shift",
+        "Bytes of dead code in the benchmark's main, which change where the port's functions " ++
+            "land, to test how much a row depends on where code sits (default 0)",
+    ) orelse 0;
+    addBench(b, target, intrinsics, multithread, silesia, bench_code_shift);
 }
 
 fn zstdModule(
@@ -183,12 +189,14 @@ fn addBench(
     intrinsics: bool,
     multithread: bool,
     silesia: ?*std.Build.Dependency,
+    code_shift: u32,
 ) void {
     const bench_step = b.step("bench", "Time the port against the original (ReleaseFast)");
     const options = b.addOptions();
     if (silesia) |dep| options.addOptionPathDirectory("silesia", dep.path("")) else {
         options.addOption([]const u8, "silesia", "");
     }
+    options.addOption(u32, "code_shift", code_shift);
     const bench = b.addExecutable(.{
         .name = "bench",
         .root_module = b.createModule(.{
