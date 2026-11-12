@@ -124,8 +124,8 @@ Two limits of std's decoder (Zig 0.17.0) shape the round trips:
 
 ### Tests and counts
 
-`zig build test` runs 298 tests in about 28 minutes on the machine in
-[`BENCHMARKS.md`](BENCHMARKS.md): 58 unit tests in `src/`, and 120 oracle
+`zig build test` runs 306 tests in about 25 minutes on the machine in
+[`BENCHMARKS.md`](BENCHMARKS.md): 58 unit tests in `src/`, and 124 oracle
 tests run twice, as `oracle` (the port's `@Vector` paths against the
 original's SIMD paths) and as `oracle-scalar` (both sides on their scalar
 paths). `-Dcorpus=false` skips the corpus tests, and `-Doracle-scalar=false`
@@ -200,10 +200,25 @@ that depend on the timing, in two runs of the original 9,167,360 and
 
 ### Build modes
 
-The recorded run of 298 tests is the default, ReleaseSafe.
+The recorded run of 306 tests is the default, ReleaseSafe. Three more runs
+check what the default run does not reach:
+
+- `-Doverflow-correct-frequently` builds both sides with upstream's
+  `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY`, so the window's index correction
+  runs on small inputs. With `-Dcorpus=false -Dfuzz-cases=150`, 300 of 306
+  pass and the 6 corpus runs are skipped, in 14 minutes.
+- `-Dskeptic` adds the skeptics' probes: parameter combinations, LDM hash logs
+  25 to 27, pledged sizes near 2^64, size hints near 2^31, large CDicts, and a
+  3.5 GiB input through the real index correction. With `-Dcorpus=false`, 252
+  of 258 oracle runs pass and the 6 corpus runs are skipped, in 17 minutes, at
+  a peak of 6 GB.
+- `-Dtest-optimize=Debug` on the block-level tests (50 of 50) and the frame
+  tests (54 of 55; the CDict test was stopped after 18 minutes) found no
+  panic that ReleaseSafe misses.
 
 ### State
 
-The oracle tests pass. The performance pass, the skeptic's review and the
-fixes are still under way, and [`STATUS.md`](../STATUS.md) lists the open
-points they start from.
+The oracle tests pass. The skeptics' review and its fixes are done, except
+for 32-bit targets: the port compiles for them and most tests pass, and
+[`STATUS.md`](../STATUS.md) lists what is left. The performance pass is under
+way.

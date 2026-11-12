@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
     const skeptic = b.option(
         bool,
         "skeptic",
-        "Run the skeptic tests, which fail until their findings are fixed (default false)",
+        "Run the skeptics' slow and large probes as well (default false)",
     ) orelse false;
     const correct_often = b.option(
         bool,

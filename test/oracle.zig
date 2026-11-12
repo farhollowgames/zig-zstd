@@ -63,6 +63,6 @@ test {
 }
 
 test {
-    // The skeptic's findings fail until fixed, so they run only with -Dskeptic.
+    // The skeptics' probes are slow and large, so they run only with -Dskeptic.
     if (@import("test_options").skeptic) _ = @import("skeptic_test.zig");
 }

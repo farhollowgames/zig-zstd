@@ -97,7 +97,7 @@ The parts of the original that are left out, each with its reason, are listed in
 
 ## Testing and benchmarks
 
-`zig build test` runs 298 tests: 58 unit tests and 120 oracle tests, run twice,
+`zig build test` runs 306 tests: 58 unit tests and 124 oracle tests, run twice,
 once with both sides on their SIMD paths and once with both on their scalar
 paths. The oracle tests run the original and the port on the same inputs
 (upstream's test files, the Silesia and Canterbury corpora, hand-made edge

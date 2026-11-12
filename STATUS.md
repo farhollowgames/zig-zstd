@@ -26,8 +26,8 @@ buffer-less and streaming compression (`compressStream2` with continue, flush an
 stable buffers), dictionaries, prefixes and CDicts, the sequence API and the external
 sequence producer, and multithreading on `std.Thread` with its pool.
 
-**Tests.** `zig build test` (corpus on): 298 of 298 pass in 28 minutes (58 unit, 120
-`oracle`, 120 `oracle-scalar`); `-Dcorpus=false` skips Silesia and Canterbury. Each fuzz
+**Tests.** `zig build test` (corpus on): 306 of 306 pass in 25 minutes (58 unit, 124
+`oracle`, 124 `oracle-scalar`); `-Dcorpus=false` skips Silesia and Canterbury. Each fuzz
 test runs 1,000 cases. Frames are compared byte for byte with the original's, and every
 frame decodes through std's decoder and the original's.
 
@@ -106,6 +106,8 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
     `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY`, so the main window's overflow correction
     (`reduceIndex`, never reached by the normal suite) runs: 33 of 34 frame, stream,
     dictionary, worker and LDM tests pass at 150 fuzz cases; the 34th is the flake above.
+    After the fixes the whole suite passes with it: 300 of 306 at 150 cases (the 6
+    corpus runs skipped).
   - Debug (`-Dtest-optimize=Debug`, 40 fuzz cases): entropy, fast, dfast, lazy, opt and
     LDM, 50 of 50; frame, dictionaries, streams, sequences and workers, 54 of
     55 before the run was stopped in the 55th (`CDict: every way to make one ...`, still
@@ -174,11 +176,11 @@ methodology are done (the step 4 report is above), and README.md, `doc/TESTING.m
 - `port/*`: the merged porting branches, kept for history.
 
 **To resume.**
-1. Step 7 on `review/perf-and-skeptic` (under way): the window sums, the pool docs,
-   the copy docs, the test harness and the fuzz ranges are fixed, and 32-bit partly
-   (marked above). Left: the `-Doverflow-correct-frequently` run into
-   `doc/TESTING.md`, the full suite with the corpora and `-Dskeptic` once; then the
-   32-bit points above, after the perf pass merges (they touch the match finders).
+1. Step 7 on `review/perf-and-skeptic`: the window sums, the pool docs, the copy
+   docs, the test harness and the fuzz ranges are fixed, and 32-bit partly (marked
+   above). The full suite with the corpora passes (306 of 306), as do `-Dskeptic` and
+   `-Doverflow-correct-frequently` (counts in `doc/TESTING.md`). Left: the 32-bit
+   points above, after the perf pass merges (they touch the match finders).
 2. Merge `review/perf-2` into `review/perf-and-skeptic`; run the full suite with the
    corpora; set `port_multithread_merged = true` in bench/bench.zig if the perf pass has
    not; run the full benchmark pinned to one core and replace the tables in
