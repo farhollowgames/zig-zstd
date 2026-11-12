@@ -49,6 +49,16 @@ Pushing: `main` and the review branch go to
 - std's decoder takes no dictionaries, so frames made with a dictionary or a
   prefix round-trip through the original's decoder only.
 
+## Open points for review
+
+- The optimal parser keeps upstream's asserts that a dictionary's Huffman
+  codes are at most 11 bits and its FSE costs under 10 when it prices from
+  the dictionary's tables. A hand-made dictionary that breaks them panics in a
+  safe build, where upstream's release build carries on (the Huffman case is
+  undefined behaviour in C). Dictionaries from the trainer satisfy both.
+- `BlockTest.create` (test-only) panics on an empty block; compression never
+  runs a block compressor on one.
+
 ## Frame and one-shot compression
 
 | original | zig-zstd | state |
