@@ -18,17 +18,18 @@ says how the code maps to it.
 
 ## Step 4 report (11 November 2026)
 
-**Done.** zstd 1.5.7 pinned in `reference/` (v1.5.7, f8745da6). Ported and merged on `main`:
-the entropy coders, the shared types and workspace, every strategy (fast, dfast, greedy,
-lazy, lazy2 with the row matcher, btlazy2, btopt, btultra, btultra2), long-distance
-matching, the superblock and the pre-splitter, zstd_compress.c's one-shot and buffer-less
-paths with dictionaries, CDicts and the external sequence producer, and zstdmt with its
-pool. The streaming half (CStream, `compressStream2` and its MT path, the sequence API) and
-the corpus tests are on `port/stream`, not merged yet.
+**Done.** zstd 1.5.7 pinned in `reference/` (v1.5.7, f8745da6). Every feature in this file
+that is not left out is ported and merged on `main`: the entropy coders, every strategy
+(fast, dfast, greedy, lazy, lazy2 with the row matcher, btlazy2, btopt, btultra,
+btultra2), long-distance matching, the superblock and the pre-splitter, one-shot,
+buffer-less and streaming compression (`compressStream2` with continue, flush and end,
+stable buffers), dictionaries, prefixes and CDicts, the sequence API and the external
+sequence producer, and multithreading on `std.Thread` with its pool.
 
-**Tests.** `zig build test -Dcorpus=false` on `main`: 260 of 260 pass (unit, `oracle`,
-`oracle-scalar`), each fuzz test at 1,000 cases. Frames are compared byte for byte with the
-original's, and every frame decodes through std's decoder and the original's.
+**Tests.** `zig build test` (corpus on): 298 of 298 pass in 28 minutes (58 unit, 120
+`oracle`, 120 `oracle-scalar`); `-Dcorpus=false` skips Silesia and Canterbury. Each fuzz
+test runs 1,000 cases. Frames are compared byte for byte with the original's, and every
+frame decodes through std's decoder and the original's.
 
 **Speed and ratio** (Silesia, one thread, `zig build bench`, before the performance pass;
 `doc/BENCHMARKS.md`). Ratios are equal at every level, since the frames are equal.
@@ -59,14 +60,9 @@ zig build <step> -j3`, never while the scratchpad's `bench.running` exists.
 `zig build check` compiles everything; `zig build test -Dcorpus=false` skips the
 corpus runs.
 
-Work happens on branches, one per area, each in a worktree under
-`~/Projects/zig-zstd.wt/`, merged into `main` once its tests pass. Merged:
-the entropy coders, the shared types and workspace, every match finder
-(fast, dfast, lazy and the row matcher, btlazy2, opt, LDM), zstd_compress.c
-up to the one-shot and buffer-less frame paths with CDicts, the superblock,
-the pre-splitter, and zstdmt with its pool. On `port/stream`, awaiting merge:
-the streaming half of zstd_compress.c (CStream, `compressStream2` and its MT
-path, the streaming `compress2`, the sequence API) and the corpus tests.
+All porting branches (`port/*`) are merged into `main` and pushed. Steps 1 to 4 of the
+methodology are done. Step 5 (the performance pass) is on `review/perf-and-skeptic`;
+steps 6 (skeptic) and 7 (fixes) follow on the same branch, then step 8 (release).
 
 Pushing: `main` and the review branch go to
 `git@github.com:farhollowgames/zig-zstd.git`, fast-forward only.
