@@ -210,3 +210,231 @@ pub extern fn reference_appliedCParams(
     cctx: *const ZSTD_CCtx,
     cparams: *ZSTD_compressionParameters,
 ) void;
+// The entropy coders' internal functions, exported by the library, and the
+// helpers in test/reference.c that reach their inline parts.
+
+pub extern fn HIST_add(count: [*]c_uint, src: ?*const anyopaque, src_size: usize) void;
+pub extern fn HIST_count_simple(
+    count: [*]c_uint,
+    max_symbol_value: *c_uint,
+    src: ?*const anyopaque,
+    src_size: usize,
+) c_uint;
+pub extern fn HIST_count(
+    count: [*]c_uint,
+    max_symbol_value: *c_uint,
+    src: ?*const anyopaque,
+    src_size: usize,
+) usize;
+pub extern fn HIST_countFast(
+    count: [*]c_uint,
+    max_symbol_value: *c_uint,
+    src: ?*const anyopaque,
+    src_size: usize,
+) usize;
+pub extern fn HIST_count_wksp(
+    count: [*]c_uint,
+    max_symbol_value: *c_uint,
+    src: ?*const anyopaque,
+    src_size: usize,
+    workspace: ?*anyopaque,
+    workspace_size: usize,
+) usize;
+pub extern fn HIST_countFast_wksp(
+    count: [*]c_uint,
+    max_symbol_value: *c_uint,
+    src: ?*const anyopaque,
+    src_size: usize,
+    workspace: ?*anyopaque,
+    workspace_size: usize,
+) usize;
+
+pub extern fn FSE_optimalTableLog(
+    max_table_log: c_uint,
+    src_size: usize,
+    max_symbol_value: c_uint,
+) c_uint;
+pub extern fn FSE_optimalTableLog_internal(
+    max_table_log: c_uint,
+    src_size: usize,
+    max_symbol_value: c_uint,
+    minus: c_uint,
+) c_uint;
+pub extern fn FSE_normalizeCount(
+    normalized_counter: [*]c_short,
+    table_log: c_uint,
+    count: [*]const c_uint,
+    total: usize,
+    max_symbol_value: c_uint,
+    use_low_prob_count: c_uint,
+) usize;
+pub extern fn FSE_NCountWriteBound(max_symbol_value: c_uint, table_log: c_uint) usize;
+pub extern fn FSE_writeNCount(
+    buffer: ?*anyopaque,
+    buffer_size: usize,
+    normalized_counter: [*]const c_short,
+    max_symbol_value: c_uint,
+    table_log: c_uint,
+) usize;
+pub extern fn FSE_buildCTable_wksp(
+    ct: [*]c_uint,
+    normalized_counter: [*]const c_short,
+    max_symbol_value: c_uint,
+    table_log: c_uint,
+    workspace: ?*anyopaque,
+    workspace_size: usize,
+) usize;
+pub extern fn FSE_buildCTable_rle(ct: [*]c_uint, symbol_value: u8) usize;
+pub extern fn FSE_compress_usingCTable(
+    dst: ?*anyopaque,
+    dst_size: usize,
+    src: ?*const anyopaque,
+    src_size: usize,
+    ct: [*]const c_uint,
+) usize;
+pub extern fn FSE_compressBound(size: usize) usize;
+pub extern fn FSE_readNCount(
+    normalized_counter: [*]c_short,
+    max_symbol_value: *c_uint,
+    table_log: *c_uint,
+    header: ?*const anyopaque,
+    header_size: usize,
+) usize;
+
+pub extern fn HUF_readStats(
+    huff_weight: [*]u8,
+    hw_size: usize,
+    rank_stats: [*]u32,
+    nb_symbols: *u32,
+    table_log: *u32,
+    src: ?*const anyopaque,
+    src_size: usize,
+) usize;
+pub extern fn HUF_readStats_wksp(
+    huff_weight: [*]u8,
+    hw_size: usize,
+    rank_stats: [*]u32,
+    nb_symbols: *u32,
+    table_log: *u32,
+    src: ?*const anyopaque,
+    src_size: usize,
+    workspace: ?*anyopaque,
+    workspace_size: usize,
+    flags: c_int,
+) usize;
+pub extern fn HUF_optimalTableLog(
+    max_table_log: c_uint,
+    src_size: usize,
+    max_symbol_value: c_uint,
+    workspace: ?*anyopaque,
+    workspace_size: usize,
+    table: [*]usize,
+    count: [*]const c_uint,
+    flags: c_int,
+) c_uint;
+pub extern fn HUF_writeCTable_wksp(
+    dst: ?*anyopaque,
+    max_dst_size: usize,
+    ctable: [*]const usize,
+    max_symbol_value: c_uint,
+    huff_log: c_uint,
+    workspace: ?*anyopaque,
+    workspace_size: usize,
+) usize;
+pub extern fn HUF_readCTable(
+    ctable: [*]usize,
+    max_symbol_value: *c_uint,
+    src: ?*const anyopaque,
+    src_size: usize,
+    has_zero_weights: *c_uint,
+) usize;
+pub extern fn HUF_getNbBitsFromCTable(ctable: [*]const usize, symbol_value: u32) u32;
+pub extern fn HUF_buildCTable_wksp(
+    ctable: [*]usize,
+    count: [*]const c_uint,
+    max_symbol_value: u32,
+    max_nb_bits: u32,
+    workspace: ?*anyopaque,
+    workspace_size: usize,
+) usize;
+pub extern fn HUF_estimateCompressedSize(
+    ctable: [*]const usize,
+    count: [*]const c_uint,
+    max_symbol_value: c_uint,
+) usize;
+pub extern fn HUF_validateCTable(
+    ctable: [*]const usize,
+    count: [*]const c_uint,
+    max_symbol_value: c_uint,
+) c_int;
+pub extern fn HUF_compressBound(size: usize) usize;
+pub extern fn HUF_compress1X_usingCTable(
+    dst: ?*anyopaque,
+    dst_size: usize,
+    src: ?*const anyopaque,
+    src_size: usize,
+    ctable: [*]const usize,
+    flags: c_int,
+) usize;
+pub extern fn HUF_compress4X_usingCTable(
+    dst: ?*anyopaque,
+    dst_size: usize,
+    src: ?*const anyopaque,
+    src_size: usize,
+    ctable: [*]const usize,
+    flags: c_int,
+) usize;
+pub extern fn HUF_compress1X_repeat(
+    dst: ?*anyopaque,
+    dst_size: usize,
+    src: ?*const anyopaque,
+    src_size: usize,
+    max_symbol_value: c_uint,
+    huff_log: c_uint,
+    workspace: ?*anyopaque,
+    workspace_size: usize,
+    huf_table: ?[*]usize,
+    repeat: ?*c_uint,
+    flags: c_int,
+) usize;
+pub extern fn HUF_compress4X_repeat(
+    dst: ?*anyopaque,
+    dst_size: usize,
+    src: ?*const anyopaque,
+    src_size: usize,
+    max_symbol_value: c_uint,
+    huff_log: c_uint,
+    workspace: ?*anyopaque,
+    workspace_size: usize,
+    huf_table: ?[*]usize,
+    repeat: ?*c_uint,
+    flags: c_int,
+) usize;
+pub extern fn HUF_cardinality(count: [*]const c_uint, max_symbol_value: c_uint) c_uint;
+pub extern fn HUF_minTableLog(symbol_cardinality: c_uint) c_uint;
+
+pub extern fn reference_bitWrite(
+    dst: ?*anyopaque,
+    dst_capacity: usize,
+    values: [*]const usize,
+    widths: [*]const c_uint,
+    ops: [*]const u8,
+    n: usize,
+) usize;
+pub extern fn reference_fseEncode(
+    dst: ?*anyopaque,
+    dst_capacity: usize,
+    ct: [*]const c_uint,
+    symbols: [*]const u8,
+    extra: [*]const c_uint,
+    extra_bits: [*]const c_uint,
+    n: usize,
+    init2: c_int,
+) usize;
+pub extern fn reference_fseBitCost(
+    ct: [*]const c_uint,
+    table_log: c_uint,
+    symbol: c_uint,
+    accuracy_log: c_uint,
+) c_uint;
+pub extern fn reference_fseGetMaxNbBits(ct: [*]const c_uint, symbol: c_uint) c_uint;
