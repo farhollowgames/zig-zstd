@@ -53,3 +53,27 @@ Decompression is left to Zig's standard library (`std.compress.zstd`).
   and `ZSTD_NO_INTRINSICS` the `intrinsics` option turned off. The port
   compiles for the target's CPU features, where the original can dispatch on
   BMI2 at run time; the output does not depend on it.
+
+## Left out
+
+The author approved leaving these out of the port:
+
+- **Dictionary training** (`ZDICT_*`: `zdict.c`, `cover.c`, `fastcover.c`,
+  `divsufsort.c`). The tests use the original's trainer to make dictionaries.
+- **Decompression and the frame readers** (`ZSTD_decompress*`, `ZSTD_DCtx*`,
+  `ZSTD_DStream*`, `ZSTD_DDict*`, the legacy formats, `ZSTD_isFrame`,
+  `ZSTD_isSkippableFrame`, `ZSTD_readSkippableFrame`, `ZSTD_getFrameContentSize`,
+  `ZSTD_findFrameCompressedSize`). Zig's std decompresses zstd.
+- **`ZSTD_customMem`**, a struct of allocation callbacks. A `std.mem.Allocator`
+  takes its place.
+- **BMI2 run-time dispatch** (`DYNAMIC_BMI2`, `STATIC_BMI2`). The port is built
+  for the target's CPU features, and the output does not depend on BMI2.
+- **Build switches for C builds**: the `ZSTD_EXCLUDE_*_BLOCK_COMPRESSOR`
+  switches (binary size only), `ZSTD_COMPRESS_HEAPMODE`, tracing (`ZSTD_TRACE`,
+  `ZSTD_HAVE_WEAK_SYMBOLS`), debug and sanitizer switches (`DEBUGLEVEL`,
+  `ZSTD_ADDRESS_SANITIZER`, `ZSTD_MEMORY_SANITIZER`, `ZSTD_DATAFLOW_SANITIZER`),
+  and the C build-configuration macros (`ZSTD_STRIP_ERROR_STRINGS`,
+  `ZSTD_LIB_MINIFY`, `ZSTD_LINUX_KERNEL`, `ZSTD_DEPS_*`, `XXH_*`).
+- **`ZSTD_C_PREDICT`** (an experimental, disabled path in `zstd_opt.c`), the
+  fuzzing build mode (`FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION`) and
+  `ZSTD_RESIZE_SEQPOOL` (fixed to 0 in the original).

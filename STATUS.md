@@ -44,7 +44,7 @@ frame decodes through std's decoder and the original's.
 | 13 to 22 | 1% to 5% faster |
 | 19 | 2.8% faster (8.3 against 8.0 MB/s, ratio 2.817) |
 
-**Left out, awaiting the author's approval:** the list at the end of this file (dictionary
+**Left out, approved by the author (11 November):** the list at the end of this file (dictionary
 training, decompression and frame readers, `ZSTD_customMem`, BMI2 dispatch, the strategy
 exclusion switches, `ZSTD_COMPRESS_HEAPMODE`, tracing, debug and sanitizer switches, C
 build configuration, `ZSTD_C_PREDICT`, the fuzzing mode, `ZSTD_RESIZE_SEQPOOL`).
@@ -299,7 +299,7 @@ Pushing: `main` and the review branch go to
 | `ZSTDMT_NBWORKERS_MAX`, `ZSTDMT_JOBSIZE_MIN`, `ZSTDMT_JOBSIZE_MAX` | `nbworkers_max`, `jobsize_min`, `jobsize_max` in `zstdmt.zig` | ported (the original's values; the parameter bounds in `compress.zig` use them) |
 | `ZSTD_WINDOW_OVERFLOW_CORRECT_FREQUENTLY` | a build option for the tests | ported (`build_options.overflow_correct_frequently`, always off: no `-D` flag yet) |
 
-## Left out, awaiting the author's approval
+## Left out, approved by the author
 
 | original | reason |
 | --- | --- |
