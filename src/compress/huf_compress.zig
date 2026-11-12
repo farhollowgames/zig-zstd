@@ -12,6 +12,7 @@ const Error = @import("../error.zig").Error;
 const fse = @import("../common/fse.zig");
 const huf = @import("../common/huf.zig");
 const bitstream = @import("../common/bitstream.zig");
+const hot_code_align = @import("../common/zstd_internal.zig").hot_code_align;
 const entropy_common = @import("../common/entropy_common.zig");
 const fse_compress = @import("fse_compress.zig");
 const hist = @import("hist.zig");
@@ -815,7 +816,11 @@ fn tightCompressBound(src_size: usize, table_log: usize) usize {
 }
 
 /// `HUF_compress1X_usingCTable_internal_body`.
-fn compress1XUsingCTableInternal(dst: []u8, src: []const u8, ctable: []const CElt) usize {
+fn compress1XUsingCTableInternal(
+    dst: []u8,
+    src: []const u8,
+    ctable: []const CElt,
+) align(hot_code_align) usize {
     const table_log: u32 = readCTableHeader(ctable).table_log;
     const ct = ctable[1..].ptr;
     const ip = src.ptr;

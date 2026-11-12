@@ -293,7 +293,7 @@ pub fn encodeSequences(
     sequences: []const SeqDef,
     long_offsets: bool,
     bmi2: bool,
-) Error!usize {
+) align(zstd_internal.hot_code_align) Error!usize {
     _ = bmi2;
     const nb_seq = sequences.len;
     assert(ml_code_table.len >= nb_seq and of_code_table.len >= nb_seq);

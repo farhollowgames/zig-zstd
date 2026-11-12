@@ -3,6 +3,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Error = @import("../error.zig").Error;
+const hot_code_align = @import("../common/zstd_internal.zig").hot_code_align;
 
 /// The workspace `countWksp` and `countFastWksp` take, in `u32` units.
 pub const wksp_size_u32 = 1024;
@@ -51,7 +52,7 @@ fn countParallelWksp(
     src: []const u8,
     check: CheckInput,
     workspace: *[wksp_size_u32]u32,
-) Error!usize {
+) align(hot_code_align) Error!usize {
     assert(max_symbol_value_ptr.* <= 255);
     const count_size = max_symbol_value_ptr.* + 1;
     if (src.len == 0) {

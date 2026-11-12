@@ -21,6 +21,7 @@ const rep_num = zstd_internal.rep_num;
 const MatchState = internal.MatchState;
 const SeqStore = internal.SeqStore;
 const DictMode = internal.DictMode;
+const hot_code_align = internal.hot_code_align;
 const CompressionParameters = params.CompressionParameters;
 const count = internal.count;
 const count2Segments = internal.count2Segments;
@@ -1488,7 +1489,7 @@ noinline fn btSearchFn(
     ip: [*]const u8,
     i_limit: [*]const u8,
     off_base_ptr: *usize,
-) usize {
+) align(hot_code_align) usize {
     assert(std.math.clamp(ms.cparams.min_match, 4, 6) == mls);
     return btFindBestMatch(ms, ip, i_limit, off_base_ptr, mls, dict_mode);
 }
@@ -1501,7 +1502,7 @@ noinline fn hcSearchFn(
     ip: [*]const u8,
     i_limit: [*]const u8,
     offset_ptr: *usize,
-) usize {
+) align(hot_code_align) usize {
     assert(std.math.clamp(ms.cparams.min_match, 4, 6) == mls);
     return hcFindBestMatch(ms, ip, i_limit, offset_ptr, mls, dict_mode);
 }
@@ -1515,7 +1516,7 @@ noinline fn rowSearchFn(
     ip: [*]const u8,
     i_limit: [*]const u8,
     offset_ptr: *usize,
-) usize {
+) align(hot_code_align) usize {
     assert(std.math.clamp(ms.cparams.min_match, 4, 6) == mls);
     assert(std.math.clamp(ms.cparams.search_log, 4, 6) == row_log);
     return rowFindBestMatch(ms, ip, i_limit, offset_ptr, mls, dict_mode, row_log);
@@ -2327,7 +2328,7 @@ fn blockCompressor(
             seq_store: *SeqStore,
             rep: *[rep_num]u32,
             src: []const u8,
-        ) usize {
+        ) align(hot_code_align) usize {
             if (dict_mode == .ext_dict) {
                 return compressBlockLazyExtDictGeneric(
                     ms,

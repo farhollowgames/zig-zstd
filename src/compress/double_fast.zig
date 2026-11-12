@@ -18,6 +18,7 @@ const rep_num = zstd_internal.rep_num;
 const hash_read_size = ci.hash_read_size;
 const short_cache_tag_bits = ci.short_cache_tag_bits;
 const search_strength = ci.search_strength;
+const hot_code_align = ci.hot_code_align;
 
 /// Positions between the entries a fill always writes.
 const fast_hash_fill_step = 3;
@@ -107,13 +108,13 @@ const Found = enum {
 };
 
 /// `ZSTD_compressBlock_doubleFast_noDict_generic`.
-inline fn compressBlockDoubleFastNoDictGeneric(
+noinline fn compressBlockDoubleFastNoDictGeneric(
     ms: *MatchState,
     seq_store: *SeqStore,
     rep: *[rep_num]u32,
     src: []const u8,
     comptime mls: u32,
-) usize {
+) align(hot_code_align) usize {
     const cparams = &ms.cparams;
     const hash_long = ms.hash_table;
     const h_bits_l = cparams.hash_log;
@@ -396,13 +397,13 @@ fn prefetchArea(p: [*]const u8, size: usize) void {
 }
 
 /// `ZSTD_compressBlock_doubleFast_dictMatchState_generic`.
-inline fn compressBlockDoubleFastDictMatchStateGeneric(
+noinline fn compressBlockDoubleFastDictMatchStateGeneric(
     ms: *MatchState,
     seq_store: *SeqStore,
     rep: *[rep_num]u32,
     src: []const u8,
     comptime mls: u32,
-) usize {
+) align(hot_code_align) usize {
     const cparams = &ms.cparams;
     const hash_long = ms.hash_table;
     const h_bits_l = cparams.hash_log;
@@ -697,6 +698,8 @@ inline fn compressBlockDoubleFastDictMatchStateGeneric(
 }
 
 /// `ZSTD_compressBlock_doubleFast`: the block compressor without a dictionary.
+/// Each variant is a function of its own, page-aligned (`hot_code_align`),
+/// as the fast block compressor's are.
 pub fn compressBlockDoubleFast(
     ms: *MatchState,
     seq_store: *SeqStore,
@@ -729,13 +732,13 @@ pub fn compressBlockDoubleFastDictMatchState(
 }
 
 /// `ZSTD_compressBlock_doubleFast_extDict_generic`.
-fn compressBlockDoubleFastExtDictGeneric(
+noinline fn compressBlockDoubleFastExtDictGeneric(
     ms: *MatchState,
     seq_store: *SeqStore,
     rep: *[rep_num]u32,
     src: []const u8,
     comptime mls: u32,
-) usize {
+) align(hot_code_align) usize {
     const cparams = &ms.cparams;
     const hash_long = ms.hash_table;
     const h_bits_l = cparams.hash_log;

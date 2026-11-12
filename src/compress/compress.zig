@@ -2588,7 +2588,7 @@ fn buildSequencesStatistics(
     strategy: Strategy,
     count_workspace: []u32,
     entropy_workspace: []u8,
-) Error!SymbolEncodingTypeStats {
+) align(ci.hot_code_align) Error!SymbolEncodingTypeStats {
     var op: usize = 0;
     var stats: SymbolEncodingTypeStats = .{
         .ll_type = .basic,

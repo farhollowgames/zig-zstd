@@ -16,6 +16,7 @@ const native_endian = builtin.cpu.arch.endian();
 const rep_num = zstd_internal.rep_num;
 const hash_read_size = ci.hash_read_size;
 const short_cache_tag_bits = ci.short_cache_tag_bits;
+const hot_code_align = ci.hot_code_align;
 
 /// Positions between the hash table entries a fill always writes.
 const fast_hash_fill_step = 3;
@@ -141,14 +142,14 @@ inline fn match4FoundBranch(
 ///
 /// A match flushes the pipeline; the loop then starts it again with a hash
 /// and lookup at N and a hash at N+1.
-inline fn compressBlockFastNoDictGeneric(
+noinline fn compressBlockFastNoDictGeneric(
     ms: *MatchState,
     seq_store: *SeqStore,
     rep: *[rep_num]u32,
     src: []const u8,
     comptime mls: u32,
     comptime use_cmov: bool,
-) usize {
+) align(hot_code_align) usize {
     const cparams = &ms.cparams;
     const hash_table = ms.hash_table;
     const hlog = cparams.hash_log;
@@ -382,6 +383,10 @@ inline fn compressBlockFastNoDictGeneric(
 }
 
 /// `ZSTD_compressBlock_fast`: the block compressor without a dictionary.
+/// Each variant is a function of its own, so each starts on a page of its
+/// own (`hot_code_align`); inlined here, as the original's are, the variants
+/// shared one 17 KiB function whose page boundaries fell inside half their
+/// loops.
 pub fn compressBlockFast(
     ms: *MatchState,
     seq_store: *SeqStore,
@@ -417,14 +422,14 @@ fn prefetchArea(p: [*]const u8, size: usize) void {
 
 /// `ZSTD_compressBlock_fast_dictMatchState_generic`. `has_step` is not
 /// used to specialise, as in the original.
-inline fn compressBlockFastDictMatchStateGeneric(
+noinline fn compressBlockFastDictMatchStateGeneric(
     ms: *MatchState,
     seq_store: *SeqStore,
     rep: *[rep_num]u32,
     src: []const u8,
     comptime mls: u32,
     comptime has_step: bool,
-) usize {
+) align(hot_code_align) usize {
     _ = has_step;
     const cparams = &ms.cparams;
     const hash_table = ms.hash_table;
@@ -650,14 +655,14 @@ pub fn compressBlockFastDictMatchState(
 
 /// `ZSTD_compressBlock_fast_extDict_generic`. `has_step` is not used to
 /// specialise, as in the original.
-fn compressBlockFastExtDictGeneric(
+noinline fn compressBlockFastExtDictGeneric(
     ms: *MatchState,
     seq_store: *SeqStore,
     rep: *[rep_num]u32,
     src: []const u8,
     comptime mls: u32,
     comptime has_step: bool,
-) usize {
+) align(hot_code_align) usize {
     _ = has_step;
     const cparams = &ms.cparams;
     const hash_table = ms.hash_table;
